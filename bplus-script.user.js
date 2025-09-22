@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         B.Plus! - Contador de Atendimentos & Melhorias Beemore
 // @namespace    http://tampermonkey.net/
-// @version      7.1
+// @version      7.2
 // @downloadURL  https://raw.githubusercontent.com/leolemos992/bplus-scripts/main/bplus-script.user.js
 // @updateURL    https://raw.githubusercontent.com/leolemos992/bplus-scripts/main/bplus-script.user.js
-// @description  Correção no bug de recolher/expandir. O estado dos grupos agora é mantido entre as atualizações da lista.
+// @description  Agrupamento de chats aprimorado para incluir todas as seções, garantindo que nenhum chat seja ocultado.
 // @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
 // @grant        GM_xmlhttpRequest
@@ -318,35 +318,41 @@
     }
 
     function agruparEOrdenarChats() {
-        const othersHeader = Array.from(document.querySelectorAll('app-chat-list > header')).find(h => h.querySelector('span')?.textContent.trim() === 'Outros');
-        if (!othersHeader) return;
-        const othersContainer = othersHeader.nextElementSibling;
-        if (!othersContainer) return;
+        const chatListContainer = document.querySelector('app-chat-list-container > section');
+        if (!chatListContainer || chatListContainer.getAttribute('data-crx-grouped') === 'true') return;
 
-        // Salva o estado atual de recolhimento antes de reconstruir a lista
-        othersContainer.querySelectorAll('.crx-group-header.collapsed').forEach(header => {
+        // Salva o estado dos grupos recolhidos antes de modificar
+        chatListContainer.querySelectorAll('.crx-group-header.collapsed').forEach(header => {
             const categoryName = header.querySelector('span:first-child').textContent.split(' [')[0];
             collapsedGroups.add(categoryName);
         });
 
-        const items = Array.from(othersContainer.querySelectorAll('app-chat-list-item'));
-        if (items.length === 0 && othersContainer.getAttribute('data-crx-grouped') === 'true') return;
+        const allChatLists = Array.from(chatListContainer.querySelectorAll('app-chat-list'));
+        const myChatsList = allChatLists.find(list => list.querySelector('header > div > span')?.textContent.trim() === 'Meus chats');
+        const otherChatsItems = allChatLists.filter(list => list !== myChatsList)
+                                            .flatMap(list => Array.from(list.querySelectorAll('app-chat-list-item')));
+
+        if (otherChatsItems.length === 0) return; // Nada para agrupar
 
         const groups = new Map();
-        items.forEach(item => {
+        otherChatsItems.forEach(item => {
             const category = item.querySelector('section > div:first-of-type > span:last-of-type')?.textContent.trim() || 'Sem Categoria';
             if (!groups.has(category)) groups.set(category, []);
             groups.get(category).push(item);
         });
 
+        // Limpa o container, mas preserva a seção "Meus chats" se ela existir
+        const newContainer = document.createElement('div');
+        if (myChatsList) {
+            newContainer.appendChild(myChatsList);
+        }
+
         const sortedGroups = new Map([...groups.entries()].sort());
-        othersContainer.innerHTML = ''; // Limpa o container para reconstrução
 
         sortedGroups.forEach((groupItems, category) => {
             const safeCategory = category.replace(/[\s-]+/g, '-').toLowerCase();
             const isCollapsed = collapsedGroups.has(category);
 
-            // Cria o Cabeçalho
             const header = document.createElement('div');
             header.className = `crx-group-header crx-group-header-${safeCategory} ${isCollapsed ? 'collapsed' : ''}`;
             header.innerHTML = `
@@ -356,32 +362,22 @@
                 </span>
             `;
 
-            // Cria o Container para os itens
             const groupContainer = document.createElement('div');
             groupContainer.className = 'crx-group-container';
             const initialMaxHeight = groupItems.length * 80;
 
-            // Define o evento de clique para recolher/expandir
             header.onclick = () => {
                 const willCollapse = !header.classList.contains('collapsed');
                 header.classList.toggle('collapsed');
                 groupContainer.style.maxHeight = willCollapse ? '0px' : `${initialMaxHeight}px`;
-
-                // Atualiza a memória de estado (Set)
-                if (willCollapse) {
-                    collapsedGroups.add(category);
-                } else {
-                    collapsedGroups.delete(category);
-                }
+                if (willCollapse) collapsedGroups.add(category); else collapsedGroups.delete(category);
             };
 
-            othersContainer.appendChild(header);
-            othersContainer.appendChild(groupContainer);
+            newContainer.appendChild(header);
+            newContainer.appendChild(groupContainer);
 
-            // Aplica o estado inicial (recolhido ou expandido)
             groupContainer.style.maxHeight = isCollapsed ? '0px' : `${initialMaxHeight}px`;
 
-            // Ordena os itens dentro do grupo e os adiciona ao container
             groupItems.sort((a, b) => {
                 const aP = a.classList.contains('crx-chat-highlight') ? 3 : (a.classList.contains('crx-chat-aguardando') ? 2 : 1);
                 const bP = b.classList.contains('crx-chat-highlight') ? 3 : (b.classList.contains('crx-chat-aguardando') ? 2 : 1);
@@ -389,8 +385,12 @@
             });
             groupItems.forEach(item => groupContainer.appendChild(item));
         });
-        othersContainer.setAttribute('data-crx-grouped', 'true');
+
+        chatListContainer.innerHTML = '';
+        chatListContainer.appendChild(newContainer);
+        chatListContainer.setAttribute('data-crx-grouped', 'true');
     }
+
 
     // =================================================================================
     // LOOP PRINCIPAL E INICIALIZAÇÃO
@@ -399,7 +399,14 @@
 
     function aplicarCustomizacoes() {
         aplicarDestaquesECores();
-        agruparEOrdenarChats();
+        const chatListContainer = document.querySelector('app-chat-list-container > section');
+        if (chatListContainer) {
+             // Força o reagrupamento se a estrutura original do Beemore for recriada
+            if(chatListContainer.querySelector('app-chat-list')) {
+                chatListContainer.removeAttribute('data-crx-grouped');
+            }
+            agruparEOrdenarChats();
+        }
 
         if (document.querySelector('app-chat-agent-header')) {
             injetarBotaoRegistro();
@@ -416,9 +423,8 @@
             }
         });
         observer.observe(document.body, { childList: true, subtree: true });
-
         if (mainInterval) clearInterval(mainInterval);
-        mainInterval = setInterval(aplicarCustomizacoes, 2000);
+        mainInterval = setInterval(aplicarCustomizacoes, 1500); // Reduzido para resposta mais rápida
     }
 
     if (document.readyState === 'loading') {
