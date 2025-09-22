@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         B.Plus! - Contador de Atendimentos & Melhorias Beemore
 // @namespace    http://tampermonkey.net/
-// @version      7.8
+// @version      7.9
 // @downloadURL  https://raw.githubusercontent.com/leolemos992/bplus-scripts/main/bplus-script.user.js
 // @updateURL    https://raw.githubusercontent.com/leolemos992/bplus-scripts/main/bplus-script.user.js
-// @description  Nova cor para 'Sem Categoria', atualização via troca de abas (Configurações), e indicador de versão na barra lateral.
+// @description  Priorização de chats com notificação, novo método de atualização (recolher/expandir lista) e tooltip de status aprimorado.
 // @author       JOSE LEONARDO LEMOS
 // @match        https://*.beemore.com/*
 // @grant        GM_xmlhttpRequest
@@ -20,7 +20,7 @@
     'use strict';
 
     // --- CONFIGURAÇÕES GERAIS ---
-    const SCRIPT_VERSION = GM_info.script.version || '7.8';
+    const SCRIPT_VERSION = '7.9';
     const API_URL = 'http://10.1.11.15/contador/api.php';
     const CATEGORY_COLORS = {
         'Suporte - PDV': '#E57373', 'Suporte - Retaguarda': '#64B5F6', 'Suporte - Fiscal': '#81C784',
@@ -68,7 +68,7 @@
             .crx-chat-aguardando { background-color: #FFDAB9 !important; border-left: 5px solid #FFA500 !important; }
             .dark .crx-chat-aguardando { background-color: #5a4a3e !important; border-left-color: #ff8c00 !important; }
 
-            /* Ícone de Versão na Barra Lateral (NOVO) */
+            /* Ícone de Versão na Barra Lateral (ATUALIZADO) */
             #crx-version-indicator-sidebar {
                 position: relative; cursor: help;
                 width: 36px; height: 36px;
@@ -77,17 +77,16 @@
                 color: #e1dbfb;
                 background-color: transparent;
                 transition: background-color 0.15s ease-in-out;
-                font-weight: bold; font-size: 14px;
             }
             #crx-version-indicator-sidebar:hover {
                 background-color: #5e47d0;
             }
             #crx-version-indicator-sidebar .crx-tooltip {
-                visibility: hidden; width: 120px; background-color: #333;
+                visibility: hidden; width: 140px; background-color: #333;
                 color: #fff; text-align: center; border-radius: 6px;
-                padding: 5px 0; position: absolute; z-index: 100;
+                padding: 8px; position: absolute; z-index: 100;
                 left: 125%; top: 50%; transform: translateY(-50%);
-                opacity: 0; transition: opacity 0.3s;
+                opacity: 0; transition: opacity 0.3s; line-height: 1.4;
             }
             #crx-version-indicator-sidebar:hover .crx-tooltip {
                 visibility: visible; opacity: 1;
@@ -283,7 +282,6 @@
     // FUNCIONALIDADE 2: MELHORIAS DE INTERFACE
     // =================================================================================
     function adicionarControles(container) {
-        // Adiciona apenas o botão de atualizar, o indicador de versão agora fica na sidebar
         if (!document.getElementById('custom-refresh-btn')) {
             let refreshBtn = document.createElement('button');
             refreshBtn.id = 'custom-refresh-btn';
@@ -295,17 +293,14 @@
         }
     }
 
-    // NOVO MÉTODO: Troca de abas para forçar a atualização
+    // ATUALIZADO: Novo método de atualização via recolher/expandir lista "Outros"
     function atualizarListasDeChat(btn) {
-        const allTabs = Array.from(document.querySelectorAll('app-tab'));
-        const chatTab = allTabs.find(tab => tab.innerText.includes('Atendimento'));
-        const configTab = allTabs.find(tab => tab.innerText.includes('Configurações'));
+        const othersHeader = Array.from(document.querySelectorAll('app-chat-list > header')).find(h => h.querySelector('span')?.textContent.trim() === 'Outros');
 
-        if (!chatTab || !configTab) {
-            console.log('B.Plus!: Abas "Atendimento" ou "Configurações" não encontradas.');
+        if (!othersHeader) {
+            console.log('B.Plus!: Cabeçalho da lista "Outros" não encontrado para atualização.');
             return;
         }
-
         if (btn && btn.disabled) {
              console.log('B.Plus!: Atualização já em andamento.');
              return;
@@ -316,17 +311,19 @@
             btn.innerHTML = SPINNER_SVG;
         }
 
-        configTab.click();
+        // Simula o clique para fechar a lista "Outros"
+        othersHeader.click();
 
         setTimeout(() => {
-            chatTab.click();
+            // Simula o clique para reabrir a lista
+            othersHeader.click();
             setTimeout(() => {
                 if (btn) {
                     btn.innerHTML = REFRESH_SVG;
                     btn.disabled = false;
                 }
             }, 1000); // Aguarda a UI se reestabelecer
-        }, 300); // Tempo para o sistema processar a troca de aba
+        }, 300); // Tempo para o sistema processar a primeira ação
     }
 
     function aplicarDestaquesECores() {
@@ -336,7 +333,6 @@
 
             const hasAlert = !!item.querySelector('app-icon[icon="tablerAlertCircle"]');
             const isAguardando = !!item.querySelector('span[class*="text-orange"]');
-            // A lógica aprimorada de `getCategory` é usada em `agruparEOrdenarChats`, aqui mantemos a leitura direta
             const categoryElement = item.querySelector('section > div:first-of-type > span:last-of-type');
             const category = categoryElement ? categoryElement.textContent.trim() : 'Sem Categoria';
             const categoryClass = `crx-category-${category.replace(/[\s-]+/g, '-').toLowerCase()}`;
@@ -351,7 +347,6 @@
         const chatListContainer = document.querySelector('app-chat-list-container > section');
         if (!chatListContainer || chatListContainer.getAttribute('data-crx-grouped') === 'true') return;
 
-        // Função auxiliar para obter a categoria de forma segura
         const getCategory = (item) => {
             const categoryElement = item.querySelector('section > div:first-of-type > span:last-of-type');
             return categoryElement?.textContent.trim() || 'Sem Categoria';
@@ -406,26 +401,28 @@
             chatListContainer.appendChild(header);
             chatListContainer.appendChild(groupContainer);
             groupContainer.style.maxHeight = isCollapsed ? '0px' : `${initialMaxHeight}px`;
+            
+            // Lógica de Ordenação/Priorização mantida
             groupItems.sort((a, b) => {
                 const aP = a.classList.contains('crx-chat-highlight') ? 3 : (a.classList.contains('crx-chat-aguardando') ? 2 : 1);
                 const bP = b.classList.contains('crx-chat-highlight') ? 3 : (b.classList.contains('crx-chat-aguardando') ? 2 : 1);
-                return bP - aP;
+                return bP - aP; // Ordena do maior para o menor (prioridade)
             });
+            
             groupItems.forEach(item => groupContainer.appendChild(item));
         });
 
         chatListContainer.setAttribute('data-crx-grouped', 'true');
     }
-    
-    // NOVA FUNÇÃO: Adiciona o indicador de versão na barra lateral
+
+    // ATUALIZADO: Indicador de versão com tooltip de status
     function injetarIndicadorDeVersao() {
         if (document.getElementById('crx-version-indicator-sidebar')) return;
         const helpButton = document.querySelector('div[data-sidebar-option="help"]');
         if (helpButton) {
             const indicator = document.createElement('div');
             indicator.id = 'crx-version-indicator-sidebar';
-            indicator.innerHTML = `B+ <span class="crx-tooltip">B.Plus! v${SCRIPT_VERSION}</span>`;
-            // Insere o indicador ANTES do botão de ajuda
+            indicator.innerHTML = `B+ <span class="crx-tooltip">B.Plus! v${SCRIPT_VERSION}<br>Status: Operacional</span>`;
             helpButton.parentNode.insertBefore(indicator, helpButton);
         }
     }
@@ -449,20 +446,17 @@
             injetarBotaoRegistro();
             observarTags();
         }
-        
-        // Garante que o indicador da sidebar sempre esteja presente
+
         injetarIndicadorDeVersao();
     }
 
     function inicializar() {
         injetarEstilos();
         const observer = new MutationObserver(() => {
-            // Busca o container para o botão de refresh
             const targetContainer = document.querySelector('app-chat-list-container > div.flex.items-center');
             if (targetContainer) {
                 adicionarControles(targetContainer);
             }
-            // Busca o container para o indicador de versão na sidebar
             injetarIndicadorDeVersao();
         });
         observer.observe(document.body, { childList: true, subtree: true });
