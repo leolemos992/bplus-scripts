@@ -1,11 +1,11 @@
 // ==UserScript==
 // @name         B.Plus! - Contador de Atendimentos & Melhorias Beemore
 // @namespace    http://tampermonkey.net/
-// @version      7.3
+// @version      7.4
 // @downloadURL  https://raw.githubusercontent.com/leolemos992/bplus-scripts/main/bplus-script.user.js
 // @updateURL    https://raw.githubusercontent.com/leolemos992/bplus-scripts/main/bplus-script.user.js
-// @description  Correção na lógica de contagem para que os chats em "Meus chats" não sejam incluídos nos contadores das categorias.
-// @author       Jose Leonardo Lemos
+// @description  Novo método de atualização de chat (fecha e reabre a aba) para garantir a busca de novos dados.
+// @author       JOSE LEONARDO LEMOS
 // @match        https://*.beemore.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_addStyle
@@ -257,7 +257,7 @@
         if (document.getElementById('custom-refresh-btn')) return;
         let refreshBtn = document.createElement('button');
         refreshBtn.id = 'custom-refresh-btn';
-        refreshBtn.title = 'Atualizar listas de chat';
+        refreshBtn.title = 'Atualizar listas de chat (forçado)';
         refreshBtn.innerHTML = REFRESH_SVG;
         Object.assign(refreshBtn.style, { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '2rem', width: '2rem', marginLeft: '0.5rem', borderRadius: '0.25rem', cursor: 'pointer' });
         refreshBtn.onclick = () => atualizarListasDeChat(refreshBtn);
@@ -265,12 +265,15 @@
     }
 
     function atualizarListasDeChat(btn) {
+        // Encontra o botão de Chat na barra lateral esquerda (o gatilho para abrir)
+        const sidebarChatButton = document.querySelector('div[data-sidebar-option="entities.chat"]');
+
+        // Encontra a aba de Atendimento atualmente aberta
         const allTabs = Array.from(document.querySelectorAll('app-tab'));
         const chatTab = allTabs.find(tab => tab.innerText.includes('Atendimento'));
-        const homeButton = document.querySelector('app-home-tab');
 
-        if (!chatTab || !homeButton) {
-            console.log('B.Plus!: Abas "Atendimento" ou botão "Home" não encontrados.');
+        if (!sidebarChatButton) {
+            console.log('B.Plus!: Botão de Chat na barra lateral não encontrado.');
             return;
         }
 
@@ -284,17 +287,25 @@
             btn.innerHTML = SPINNER_SVG;
         }
 
-        homeButton.click();
+        // Se a aba de chat estiver aberta, fecha primeiro
+        if (chatTab) {
+            const closeButton = chatTab.querySelector('app-icon[icon="tablerX"]');
+            if (closeButton) {
+                closeButton.click();
+            }
+        }
 
+        // Aguarda um instante para a aba fechar e então clica no botão da sidebar para reabrir
         setTimeout(() => {
-            chatTab.click();
-
+            sidebarChatButton.click();
+            // Aguarda a renderização da lista antes de resetar o botão
             setTimeout(() => {
-                aplicarCustomizacoes();
                 if (btn) {
                     btn.innerHTML = REFRESH_SVG;
                     btn.disabled = false;
                 }
+                // Não é necessário chamar aplicarCustomizacoes() aqui,
+                // pois o loop principal já fará isso assim que a lista for recriada.
             }, 1500);
         }, 300);
     }
@@ -392,11 +403,10 @@
         aplicarDestaquesECores();
         const chatListContainer = document.querySelector('app-chat-list-container > section');
         if (chatListContainer) {
-             // Força o reagrupamento se a estrutura original do Beemore for recriada
-            if(chatListContainer.querySelector('app-chat-list')) {
+            if (!chatListContainer.getAttribute('data-crx-grouped') || chatListContainer.querySelector('app-chat-list')) {
                 chatListContainer.removeAttribute('data-crx-grouped');
+                agruparEOrdenarChats();
             }
-            agruparEOrdenarChats();
         }
 
         if (document.querySelector('app-chat-agent-header')) {
@@ -415,7 +425,7 @@
         });
         observer.observe(document.body, { childList: true, subtree: true });
         if (mainInterval) clearInterval(mainInterval);
-        mainInterval = setInterval(aplicarCustomizacoes, 1500); // Reduzido para resposta mais rápida
+        mainInterval = setInterval(aplicarCustomizacoes, 1500);
     }
 
     if (document.readyState === 'loading') {
