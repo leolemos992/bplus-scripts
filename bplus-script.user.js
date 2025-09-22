@@ -1,11 +1,9 @@
 // ==UserScript==
 // @name         B.Plus! - Contador de Atendimentos & Melhorias Beemore
 // @namespace    http://tampermonkey.net/
-// @version      7.9
-// @downloadURL  https://raw.githubusercontent.com/leolemos992/bplus-scripts/main/bplus-script.user.js
-// @updateURL    https://raw.githubusercontent.com/leolemos992/bplus-scripts/main/bplus-script.user.js
-// @description  Priorização de chats com notificação, novo método de atualização (recolher/expandir lista) e tooltip de status aprimorado.
-// @author       JOSE LEONARDO LEMOS
+// @version      8.0
+// @description  Correção robusta na captura de dados (Revenda e Serviço) para o modal de Serviço Incorreto, adaptando-se à nova estrutura do site.
+// @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_addStyle
@@ -20,7 +18,7 @@
     'use strict';
 
     // --- CONFIGURAÇÕES GERAIS ---
-    const SCRIPT_VERSION = '7.9';
+    const SCRIPT_VERSION = GM_info.script.version || '8.0';
     const API_URL = 'http://10.1.11.15/contador/api.php';
     const CATEGORY_COLORS = {
         'Suporte - PDV': '#E57373', 'Suporte - Retaguarda': '#64B5F6', 'Suporte - Fiscal': '#81C784',
@@ -128,46 +126,49 @@
     }
 
     // =================================================================================
-    // CAPTURA DE DADOS
+    // CAPTURA DE DADOS (FUNÇÃO PRINCIPAL ATUALIZADA)
     // =================================================================================
     function capturarDadosPagina() {
-        const headerElement = document.querySelector('app-chat-list-container > header');
-        const chatHeaderElement = document.querySelector('app-chat-agent-header');
-        const detailsContainer = document.querySelector('app-chat-aside');
-
         let analista = '', numero = '', solicitante = '', revenda = '', servicoSelecionado = '';
 
-        analista = headerElement?.querySelector('span.font-medium')?.innerText.trim() || '';
+        // Captura Analista Logado
+        analista = document.querySelector('app-chat-list-container > header span.font-medium')?.innerText.trim() || '';
 
+        // Captura dados do chat ativo na lista da esquerda (fonte mais confiável)
+        const activeChatItem = document.querySelector('app-chat-list-item[style*="background-color"]');
+        if (activeChatItem) {
+            solicitante = activeChatItem.querySelector('section > div:first-of-type > span:first-of-type')?.innerText.trim() || '';
+            revenda = activeChatItem.querySelector('span[style*="text-overflow: ellipsis"]')?.innerText.trim() || '';
+            servicoSelecionado = activeChatItem.querySelector('section > div:first-of-type > span:last-of-type')?.innerText.trim() || '';
+        }
+
+        // Captura Número do Chat no cabeçalho superior
+        const chatHeaderElement = document.querySelector('app-chat-agent-header');
         if (chatHeaderElement) {
             const titleElement = chatHeaderElement.querySelector('span > span');
-            if (titleElement && titleElement.parentElement) {
-                const fullTitleText = titleElement.parentElement.innerText;
-                const parts = fullTitleText.split(' - ');
-                if (parts.length > 1) {
-                    numero = parts[0].replace('#', '').trim();
-                    solicitante = parts.slice(1).join(' - ').trim();
-                }
+            if (titleElement) {
+                numero = titleElement.innerText.match(/#(\d+)/)?.[1] || '';
             }
         }
 
-        if (detailsContainer) {
-            const revendaElement = detailsContainer.querySelector('app-person-info h1, app-person-info [style*="font-size: 18px"]');
-            if (revendaElement) {
-                const tempDiv = document.createElement('div');
-                tempDiv.innerHTML = revendaElement.innerHTML;
-                tempDiv.querySelector('app-tag')?.remove();
-                revenda = tempDiv.innerText.trim();
-            }
-
-            const labels = Array.from(detailsContainer.querySelectorAll('app-label'));
-            const servicoLabel = labels.find(label => label.innerText.trim().toLowerCase() === 'serviço');
-            if (servicoLabel) {
-                servicoSelecionado = servicoLabel.nextElementSibling?.innerText.trim() || '';
+        // Fallback: Se não encontrou na lista, tenta no painel de detalhes (menos confiável)
+        if (!revenda || !servicoSelecionado) {
+            const detailsContainer = document.querySelector('app-chat-aside');
+            if(detailsContainer){
+                 if(!revenda) revenda = detailsContainer.querySelector('app-person-info h1, app-person-info [style*="font-size: 18px"]')?.innerText.trim().split('\n')[0] || '';
+                 if(!servicoSelecionado) {
+                     const labels = Array.from(detailsContainer.querySelectorAll('app-label'));
+                     const servicoLabel = labels.find(label => label.innerText.trim().toLowerCase() === 'serviço');
+                     if (servicoLabel) {
+                         servicoSelecionado = servicoLabel.nextElementSibling?.innerText.trim() || '';
+                     }
+                 }
             }
         }
+
         return { analista, numero, revenda, solicitante, servicoSelecionado };
     }
+
 
     // =================================================================================
     // FUNCIONALIDADE 1: REGISTRO DE SERVIÇO INCORRETO
@@ -401,14 +402,14 @@
             chatListContainer.appendChild(header);
             chatListContainer.appendChild(groupContainer);
             groupContainer.style.maxHeight = isCollapsed ? '0px' : `${initialMaxHeight}px`;
-            
+
             // Lógica de Ordenação/Priorização mantida
             groupItems.sort((a, b) => {
                 const aP = a.classList.contains('crx-chat-highlight') ? 3 : (a.classList.contains('crx-chat-aguardando') ? 2 : 1);
                 const bP = b.classList.contains('crx-chat-highlight') ? 3 : (b.classList.contains('crx-chat-aguardando') ? 2 : 1);
                 return bP - aP; // Ordena do maior para o menor (prioridade)
             });
-            
+
             groupItems.forEach(item => groupContainer.appendChild(item));
         });
 
