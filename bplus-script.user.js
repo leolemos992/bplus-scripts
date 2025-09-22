@@ -2,6 +2,8 @@
 // @name         B.Plus! - Contador de Atendimentos & Melhorias Beemore
 // @namespace    http://tampermonkey.net/
 // @version      6.9
+// @downloadURL  https://raw.githubusercontent.com/leolemos992/bplus-scripts/main/bplus-script.user.js
+// @updateURL    https://raw.githubusercontent.com/leolemos992/bplus-scripts/main/bplus-script.user.js
 // @description  Notificação de chat com fundo sólido baseado na cor da categoria, e todas as otimizações anteriores.
 // @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
