@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         B.Plus! - Contador de Atendimentos & Melhorias Beemore
 // @namespace    http://tampermonkey.net/
-// @version      6.9
+// @version      7.0
 // @downloadURL  https://raw.githubusercontent.com/leolemos992/bplus-scripts/main/bplus-script.user.js
 // @updateURL    https://raw.githubusercontent.com/leolemos992/bplus-scripts/main/bplus-script.user.js
-// @description  Notificação de chat com fundo sólido baseado na cor da categoria, e todas as otimizações anteriores.
+// @description  Cabeçalhos de categoria interativos (recolher/expandir), com contador de chats e cor de fundo. Novo destaque para chats aguardando.
 // @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
 // @grant        GM_xmlhttpRequest
@@ -20,13 +20,9 @@
 
     // --- CONFIGURAÇÕES GERAIS ---
     const API_URL = 'http://10.1.11.15/contador/api.php';
-    const CATEGORY_COLORS_LIGHT = {
+    const CATEGORY_COLORS = {
         'Suporte - PDV': '#E57373', 'Suporte - Retaguarda': '#64B5F6', 'Suporte - Fiscal': '#81C784',
         'Suporte - Web': '#FFD54F', 'Suporte - Mobile': '#FFB74D', 'default': '#BDBDBD'
-    };
-    const CATEGORY_COLORS_DARK = {
-        'Suporte - PDV': '#E57373', 'Suporte - Retaguarda': '#64B5F6', 'Suporte - Fiscal': '#81C784',
-        'Suporte - Web': '#FFD54F', 'Suporte - Mobile': '#FFB74D', 'default': '#757575'
     };
     const SPINNER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="crx-spinner"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg>`;
     const REFRESH_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>`;
@@ -47,34 +43,36 @@
     // =================================================================================
     function injetarEstilos() {
         if (document.getElementById('bplus-custom-styles')) return;
-        let lightStyles = '', darkStyles = '';
-
-        for (const category in CATEGORY_COLORS_LIGHT) {
+        let styles = '';
+        for (const category in CATEGORY_COLORS) {
             const safeCategory = category.replace(/[\s-]+/g, '-').toLowerCase();
-            const color = CATEGORY_COLORS_LIGHT[category];
-            const darkColor = CATEGORY_COLORS_DARK[category];
-
-            lightStyles += `
-                .${'crx-category-' + safeCategory} { border-left: 5px solid ${color} !important; }
-                .${'crx-category-' + safeCategory}.crx-chat-highlight { background-color: ${hexToRgba(color, 0.2)} !important; }
-            `;
-            darkStyles += `
-                .dark .${'crx-category-' + safeCategory} { border-left: 5px solid ${darkColor} !important; }
-                .dark .${'crx-category-' + safeCategory}.crx-chat-highlight { background-color: ${hexToRgba(darkColor, 0.25)} !important; }
+            const color = CATEGORY_COLORS[category];
+            styles += `
+                .crx-category-${safeCategory} { border-left: 5px solid ${color} !important; }
+                .crx-category-${safeCategory}.crx-chat-highlight { background-color: ${hexToRgba(color, 0.2)} !important; }
+                .dark .crx-category-${safeCategory}.crx-chat-highlight { background-color: ${hexToRgba(color, 0.25)} !important; }
+                .crx-group-header-${safeCategory} { background-color: ${color} !important; }
             `;
         }
-
         GM_addStyle(`
             /* Animações e Destaques */
             @keyframes crx-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
             .crx-spinner { animation: crx-spin 1s linear infinite; }
-            @keyframes pulse-aguardando-glow { 50% { box-shadow: 0 0 10px 3px rgba(66, 165, 245, 0.7); } }
-
-            .crx-chat-aguardando { animation: pulse-aguardando-glow 2.5s infinite; }
+            .crx-chat-aguardando { background-color: #FFDAB9 !important; border-left: 5px solid #FFA500 !important; }
+            .dark .crx-chat-aguardando { background-color: #5a4a3e !important; border-left-color: #ff8c00 !important; }
 
             /* Elementos da UI */
-            .crx-group-header { font-size: 0.75rem; font-weight: 600; background-color: #f0f0f0; padding: 4px 12px; border-bottom: 1px solid #e0e0e0; text-transform: uppercase; margin-top: 8px; position: sticky; top: 0; z-index: 5; }
-            .dark .crx-group-header { background-color: #3e374e; border-color: #4c445c; color: #e1e1e1; }
+            .crx-group-header {
+                display: flex; justify-content: space-between; align-items: center;
+                font-size: 0.8rem; font-weight: 600; color: white; text-shadow: 1px 1px 2px rgba(0,0,0,0.4);
+                padding: 6px 12px; border-radius: 4px;
+                text-transform: uppercase; margin-top: 10px; cursor: pointer;
+                position: sticky; top: 0; z-index: 10;
+            }
+            .crx-group-header .crx-chevron { transition: transform 0.2s ease-in-out; }
+            .crx-group-header.collapsed .crx-chevron { transform: rotate(-90deg); }
+            .crx-group-container { overflow: hidden; transition: max-height 0.3s ease-in-out; }
+            .crx-group-container.collapsed { max-height: 0; }
             #crx-header-btn { background-color: #FB923C; color: white !important; border: 1px solid #F97316; padding: 0 12px; height: 32px; border-radius: 0.25rem; cursor: pointer; font-weight: 500; margin-right: 8px; display: flex; align-items: center; }
             #crx-header-btn:hover { background-color: #F97316; border-color: #EA580C; }
             #custom-refresh-btn { background-color: #ffffff; border: 1px solid #e5e7eb; color: #525252; transition: transform 0.2s; }
@@ -95,7 +93,7 @@
             #crx-status { margin-top: 15px; font-weight: bold; text-align: center; }
 
             /* Estilos de Categoria */
-            ${lightStyles} ${darkStyles}
+            ${styles}
         `);
     }
 
@@ -312,8 +310,8 @@
             const categoryClass = `crx-category-${category.replace(/[\s-]+/g, '-').toLowerCase()}`;
 
             item.classList.add(categoryClass);
-            item.classList.toggle('crx-chat-highlight', hasAlert);
-            item.classList.toggle('crx-chat-aguardando', !hasAlert && isAguardando);
+            item.classList.toggle('crx-chat-highlight', hasAlert && !isAguardando);
+            item.classList.toggle('crx-chat-aguardando', isAguardando);
         });
     }
 
@@ -334,19 +332,46 @@
         });
 
         const sortedGroups = new Map([...groups.entries()].sort());
-        othersContainer.innerHTML = '';
+        othersContainer.innerHTML = ''; // Limpa o container original
 
         sortedGroups.forEach((groupItems, category) => {
+            const safeCategory = category.replace(/[\s-]+/g, '-').toLowerCase();
+
+            // Cria o Cabeçalho Interativo
             const header = document.createElement('div');
-            header.className = 'crx-group-header';
-            header.textContent = category;
+            header.className = `crx-group-header crx-group-header-${safeCategory}`;
+            header.innerHTML = `
+                <span>${category} [${groupItems.length}]</span>
+                <span class="crx-chevron">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                </span>
+            `;
+
+            // Cria o Container para os itens do grupo
+            const groupContainer = document.createElement('div');
+            groupContainer.className = 'crx-group-container';
+            const initialMaxHeight = groupItems.length * 80; // Estima a altura para a animação
+            groupContainer.style.maxHeight = `${initialMaxHeight}px`;
+
+            header.onclick = () => {
+                header.classList.toggle('collapsed');
+                groupContainer.classList.toggle('collapsed');
+                if (groupContainer.classList.contains('collapsed')) {
+                    groupContainer.style.maxHeight = '0px';
+                } else {
+                    groupContainer.style.maxHeight = `${initialMaxHeight}px`;
+                }
+            };
+
             othersContainer.appendChild(header);
+            othersContainer.appendChild(groupContainer);
+
             groupItems.sort((a, b) => {
-                const aP = a.classList.contains('crx-chat-highlight') ? 2 : (a.classList.contains('crx-chat-aguardando') ? 1 : 0);
-                const bP = b.classList.contains('crx-chat-highlight') ? 2 : (b.classList.contains('crx-chat-aguardando') ? 1 : 0);
+                const aP = a.classList.contains('crx-chat-highlight') ? 3 : (a.classList.contains('crx-chat-aguardando') ? 2 : 1);
+                const bP = b.classList.contains('crx-chat-highlight') ? 3 : (b.classList.contains('crx-chat-aguardando') ? 2 : 1);
                 return bP - aP;
             });
-            groupItems.forEach(item => othersContainer.appendChild(item));
+            groupItems.forEach(item => groupContainer.appendChild(item));
         });
         othersContainer.setAttribute('data-crx-grouped', 'true');
     }
