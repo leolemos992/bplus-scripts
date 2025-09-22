@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         B.Plus! - Contador de Atendimentos & Melhorias Beemore
 // @namespace    http://tampermonkey.net/
-// @version      8.4
-// @description  Script unificado com captura de dados aprimorada e auto-refresh inteligente por inatividade para manter a lista de chats sempre atualizada.
+// @version      8.5
+// @description  Script unificado com método de atualização estável (Dashboard -> Chat) para evitar o sumiço de chats e auto-refresh inteligente aprimorado.
 // @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
 // @grant        GM_xmlhttpRequest
@@ -18,7 +18,7 @@
     'use strict';
 
     // --- CONFIGURAÇÕES GERAIS ---
-    const SCRIPT_VERSION = GM_info.script.version || '8.4';
+    const SCRIPT_VERSION = GM_info.script.version || '8.5';
     const IDLE_REFRESH_SECONDS = 90; // Tempo em segundos para o auto-refresh
     const API_URL = 'http://10.1.11.15/contador/api.php';
     const CATEGORY_COLORS = {
@@ -62,6 +62,7 @@
             `;
         }
         GM_addStyle(`
+            #bplus-custom-styles { display: none; } /* Elemento marcador para evitar reinjeção */
             /* Animações e Destaques */
             @keyframes crx-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
             .crx-spinner { animation: crx-spin 1s linear infinite; }
@@ -76,7 +77,7 @@
             }
             #crx-version-indicator-sidebar:hover { background-color: #5e47d0; }
             #crx-version-indicator-sidebar .crx-tooltip {
-                visibility: hidden; width: 140px; background-color: #333; color: #fff; text-align: center;
+                visibility: hidden; width: 160px; background-color: #333; color: #fff; text-align: center;
                 border-radius: 6px; padding: 8px; position: absolute; z-index: 100;
                 left: 125%; top: 50%; transform: translateY(-50%); opacity: 0; transition: opacity 0.3s; line-height: 1.4;
             }
@@ -122,7 +123,6 @@
     // CAPTURA DE DADOS
     // =================================================================================
     function capturarDadosPagina() {
-        console.log("B.Plus!: Iniciando captura de dados com seletor '.active'...");
         let analista = '', numero = '', solicitante = '', revenda = '', servicoSelecionado = '';
 
         analista = document.querySelector('app-chat-list-container > header span.font-medium')?.innerText.trim() || '';
@@ -138,15 +138,11 @@
 
         const activeChatElement = document.querySelector('app-chat-list-item.active');
         if (activeChatElement) {
-            console.log("B.Plus!: Chat ativo encontrado com '.active'. Extraindo dados...");
             solicitante = activeChatElement.querySelector('span.truncate.font-medium')?.innerText.trim() || '';
             revenda = activeChatElement.querySelector('span.inline-flex > span.truncate')?.innerText.trim() || '';
             servicoSelecionado = activeChatElement.querySelector('span.shrink-0')?.innerText.trim() || '';
-        } else {
-             console.log("B.Plus!: Nenhum chat com a classe '.active' foi encontrado.");
         }
 
-        console.log("B.Plus!: Dados Capturados:", { analista, numero, revenda, solicitante, servicoSelecionado });
         return { analista, numero, revenda, solicitante, servicoSelecionado };
     }
 
@@ -260,28 +256,34 @@
     // FUNCIONALIDADE: MELHORIAS DE INTERFACE E AUTO-REFRESH
     // =================================================================================
     function adicionarControles(container) {
-        if (!document.getElementById('custom-refresh-btn')) {
-            let refreshBtn = document.createElement('button');
-            refreshBtn.id = 'custom-refresh-btn';
-            refreshBtn.title = 'Atualizar listas de chat (forçado)';
-            refreshBtn.innerHTML = REFRESH_SVG;
-            Object.assign(refreshBtn.style, { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '2rem', width: '2rem', borderRadius: '0.25rem', cursor: 'pointer' });
-            refreshBtn.onclick = () => atualizarListasDeChat();
-            container.appendChild(refreshBtn);
-        }
+        if (document.getElementById('custom-refresh-btn')) return;
+
+        let refreshBtn = document.createElement('button');
+        refreshBtn.id = 'custom-refresh-btn';
+        refreshBtn.title = 'Atualizar listas de chat (forçado)';
+        refreshBtn.innerHTML = REFRESH_SVG;
+        Object.assign(refreshBtn.style, { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '2rem', width: '2rem', borderRadius: '0.25rem', cursor: 'pointer' });
+        refreshBtn.onclick = () => atualizarListasDeChat();
+        container.appendChild(refreshBtn);
     }
 
+    /**
+     * NOVO: Método de atualização estável. Navega para o dashboard e volta para a página de chat
+     * para forçar um recarregamento completo dos dados, evitando o sumiço de chats.
+     */
     function atualizarListasDeChat(isAutoRefresh = false) {
-        const othersHeader = Array.from(document.querySelectorAll('app-chat-list > header')).find(h => h.querySelector('span')?.textContent.trim() === 'Outros');
-        if (!othersHeader) {
-            if (!isAutoRefresh) console.log('B.Plus!: Cabeçalho da lista "Outros" não encontrado para atualização.');
+        const dashboardButton = document.querySelector('div[data-sidebar-option="dashboard"]');
+        const sidebarChatButton = document.querySelector('div[data-sidebar-option="entities.chat"]');
+
+        if (!dashboardButton || !sidebarChatButton) {
+            if (!isAutoRefresh) console.log('B.Plus!: Botões de navegação (Dashboard/Chat) não encontrados.');
             return;
         }
 
         const refreshButton = document.getElementById('custom-refresh-btn');
         if (refreshButton && refreshButton.disabled) {
-            console.log('B.Plus!: Atualização já em andamento.');
-            return;
+             console.log('B.Plus!: Atualização já em andamento.');
+             return;
         }
 
         if (refreshButton) {
@@ -289,22 +291,28 @@
             refreshButton.innerHTML = SPINNER_SVG;
         }
 
-        // Simula o clique para fechar a lista "Outros"
-        othersHeader.click();
-
+        dashboardButton.click();
         setTimeout(() => {
-            // Simula o clique para reabrir a lista
-            othersHeader.click();
+            sidebarChatButton.click();
             setTimeout(() => {
                 if (refreshButton) {
                     refreshButton.innerHTML = REFRESH_SVG;
                     refreshButton.disabled = false;
                 }
-            }, 1000); // Aguarda a UI se reestabelecer
-        }, 300); // Tempo para o sistema processar a primeira ação
+            }, 1500); // Tempo para a UI do chat recarregar
+        }, 400); // Tempo para a UI do dashboard carregar
     }
 
+    /**
+     * NOVO: Lógica de atualização aprimorada.
+     */
     function performSmartRefresh() {
+        // CONDIÇÃO DE GUARDA: Só roda se estiver na página de chat
+        if (!window.location.href.includes('/chat')) {
+            resetIdleTimer();
+            return;
+        }
+
         console.log("B.Plus!: Verificando condições para auto-refresh...");
         const isChatOpen = !!document.querySelector('app-chat-agent-header');
         const isTyping = !!document.querySelector('textarea:focus, input:focus');
@@ -443,12 +451,12 @@
             injetarBotaoRegistro();
             observarTags();
         }
-
-        injetarIndicadorDeVersao();
     }
 
     function inicializar() {
         injetarEstilos();
+
+        // Observer para elementos que aparecem dinamicamente (botão de refresh e versão)
         const observer = new MutationObserver(() => {
             const targetContainer = document.querySelector('app-chat-list-container > div.flex.items-center');
             if (targetContainer) {
@@ -459,9 +467,9 @@
         observer.observe(document.body, { childList: true, subtree: true });
 
         // Inicia a lógica do auto-refresh inteligente por inatividade
-        window.addEventListener('mousemove', resetIdleTimer);
-        window.addEventListener('keypress', resetIdleTimer);
-        window.addEventListener('click', resetIdleTimer); // Adicionado para mais robustez
+        window.addEventListener('mousemove', resetIdleTimer, { passive: true });
+        window.addEventListener('keypress', resetIdleTimer, { passive: true });
+        window.addEventListener('click', resetIdleTimer, { passive: true });
         resetIdleTimer();
 
         if (mainInterval) clearInterval(mainInterval);
