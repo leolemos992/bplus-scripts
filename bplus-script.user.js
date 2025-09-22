@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         B.Plus! - Contador de Atendimentos & Melhorias Beemore
 // @namespace    http://tampermonkey.net/
-// @version      7.2
+// @version      7.3
 // @downloadURL  https://raw.githubusercontent.com/leolemos992/bplus-scripts/main/bplus-script.user.js
 // @updateURL    https://raw.githubusercontent.com/leolemos992/bplus-scripts/main/bplus-script.user.js
-// @description  Agrupamento de chats aprimorado para incluir todas as seções, garantindo que nenhum chat seja ocultado.
+// @description  Correção na lógica de contagem para que os chats em "Meus chats" não sejam incluídos nos contadores das categorias.
 // @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
 // @grant        GM_xmlhttpRequest
@@ -321,38 +321,36 @@
         const chatListContainer = document.querySelector('app-chat-list-container > section');
         if (!chatListContainer || chatListContainer.getAttribute('data-crx-grouped') === 'true') return;
 
-        // Salva o estado dos grupos recolhidos antes de modificar
+        collapsedGroups.clear();
         chatListContainer.querySelectorAll('.crx-group-header.collapsed').forEach(header => {
             const categoryName = header.querySelector('span:first-child').textContent.split(' [')[0];
             collapsedGroups.add(categoryName);
         });
 
         const allChatLists = Array.from(chatListContainer.querySelectorAll('app-chat-list'));
-        const myChatsList = allChatLists.find(list => list.querySelector('header > div > span')?.textContent.trim() === 'Meus chats');
-        const otherChatsItems = allChatLists.filter(list => list !== myChatsList)
-                                            .flatMap(list => Array.from(list.querySelectorAll('app-chat-list-item')));
+        const othersList = allChatLists.find(list => list.querySelector('header > div > span')?.textContent.trim() === 'Outros');
 
-        if (otherChatsItems.length === 0) return; // Nada para agrupar
+        if (!othersList) return; // Se não houver lista "Outros", não há nada para agrupar
 
+        const otherChatsItems = Array.from(othersList.querySelectorAll('app-chat-list-item'));
         const groups = new Map();
+
         otherChatsItems.forEach(item => {
             const category = item.querySelector('section > div:first-of-type > span:last-of-type')?.textContent.trim() || 'Sem Categoria';
             if (!groups.has(category)) groups.set(category, []);
             groups.get(category).push(item);
         });
 
-        // Limpa o container, mas preserva a seção "Meus chats" se ela existir
-        const newContainer = document.createElement('div');
-        if (myChatsList) {
-            newContainer.appendChild(myChatsList);
-        }
+        // Apaga apenas a lista "Outros" original
+        othersList.remove();
 
         const sortedGroups = new Map([...groups.entries()].sort());
 
         sortedGroups.forEach((groupItems, category) => {
+            if (groupItems.length === 0) return; // Não cria grupo vazio
+
             const safeCategory = category.replace(/[\s-]+/g, '-').toLowerCase();
             const isCollapsed = collapsedGroups.has(category);
-
             const header = document.createElement('div');
             header.className = `crx-group-header crx-group-header-${safeCategory} ${isCollapsed ? 'collapsed' : ''}`;
             header.innerHTML = `
@@ -361,23 +359,18 @@
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
                 </span>
             `;
-
             const groupContainer = document.createElement('div');
             groupContainer.className = 'crx-group-container';
             const initialMaxHeight = groupItems.length * 80;
-
             header.onclick = () => {
                 const willCollapse = !header.classList.contains('collapsed');
                 header.classList.toggle('collapsed');
                 groupContainer.style.maxHeight = willCollapse ? '0px' : `${initialMaxHeight}px`;
                 if (willCollapse) collapsedGroups.add(category); else collapsedGroups.delete(category);
             };
-
-            newContainer.appendChild(header);
-            newContainer.appendChild(groupContainer);
-
+            chatListContainer.appendChild(header);
+            chatListContainer.appendChild(groupContainer);
             groupContainer.style.maxHeight = isCollapsed ? '0px' : `${initialMaxHeight}px`;
-
             groupItems.sort((a, b) => {
                 const aP = a.classList.contains('crx-chat-highlight') ? 3 : (a.classList.contains('crx-chat-aguardando') ? 2 : 1);
                 const bP = b.classList.contains('crx-chat-highlight') ? 3 : (b.classList.contains('crx-chat-aguardando') ? 2 : 1);
@@ -386,8 +379,6 @@
             groupItems.forEach(item => groupContainer.appendChild(item));
         });
 
-        chatListContainer.innerHTML = '';
-        chatListContainer.appendChild(newContainer);
         chatListContainer.setAttribute('data-crx-grouped', 'true');
     }
 
