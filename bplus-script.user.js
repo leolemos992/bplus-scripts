@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         B.Plus! - Contador de Atendimentos & Melhorias Beemore
 // @namespace    http://tampermonkey.net/
-// @version      8.3
-// @description  Script unificado com a captura de dados aprimorada, usando o seletor '.active' para identificar o chat selecionado de forma mais robusta.
+// @version      8.4
+// @description  Script unificado com captura de dados aprimorada e auto-refresh inteligente por inatividade para manter a lista de chats sempre atualizada.
 // @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
 // @grant        GM_xmlhttpRequest
@@ -15,10 +15,11 @@
 // ==/UserScript==
 
 (function() {
-    'usestrict';
+    'use strict';
 
     // --- CONFIGURAÇÕES GERAIS ---
-    const SCRIPT_VERSION = GM_info.script.version || '8.3';
+    const SCRIPT_VERSION = GM_info.script.version || '8.4';
+    const IDLE_REFRESH_SECONDS = 90; // Tempo em segundos para o auto-refresh
     const API_URL = 'http://10.1.11.15/contador/api.php';
     const CATEGORY_COLORS = {
         'Suporte - PDV': '#E57373', 'Suporte - Retaguarda': '#64B5F6', 'Suporte - Fiscal': '#81C784',
@@ -29,8 +30,9 @@
     const SPINNER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="crx-spinner"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg>`;
     const REFRESH_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>`;
 
-    // Variável para armazenar o estado dos grupos recolhidos
+    // --- VARIÁVEIS DE ESTADO ---
     const collapsedGroups = new Set();
+    let idleTimer; // Variável para o timer de inatividade
 
     // Função auxiliar para converter HEX para RGBA
     function hexToRgba(hex, alpha) {
@@ -66,43 +68,33 @@
             .crx-chat-aguardando { background-color: #FFDAB9 !important; border-left: 5px solid #FFA500 !important; }
             .dark .crx-chat-aguardando { background-color: #5a4a3e !important; border-left-color: #ff8c00 !important; }
 
-            /* Ícone de Versão na Barra Lateral (ATUALIZADO) */
+            /* Ícone de Versão na Barra Lateral */
             #crx-version-indicator-sidebar {
-                position: relative; cursor: help;
-                width: 36px; height: 36px;
-                border-radius: 6px;
-                display: flex; align-items: center; justify-content: center;
-                color: #e1dbfb;
-                background-color: transparent;
-                transition: background-color 0.15s ease-in-out;
-                margin-bottom: 6px;
+                position: relative; cursor: help; width: 36px; height: 36px; border-radius: 6px;
+                display: flex; align-items: center; justify-content: center; color: #e1dbfb;
+                background-color: transparent; transition: background-color 0.15s ease-in-out; margin-bottom: 6px;
             }
-            #crx-version-indicator-sidebar:hover {
-                background-color: #5e47d0;
-            }
+            #crx-version-indicator-sidebar:hover { background-color: #5e47d0; }
             #crx-version-indicator-sidebar .crx-tooltip {
-                visibility: hidden; width: 140px; background-color: #333;
-                color: #fff; text-align: center; border-radius: 6px;
-                padding: 8px; position: absolute; z-index: 100;
-                left: 125%; top: 50%; transform: translateY(-50%);
-                opacity: 0; transition: opacity 0.3s; line-height: 1.4;
+                visibility: hidden; width: 140px; background-color: #333; color: #fff; text-align: center;
+                border-radius: 6px; padding: 8px; position: absolute; z-index: 100;
+                left: 125%; top: 50%; transform: translateY(-50%); opacity: 0; transition: opacity 0.3s; line-height: 1.4;
             }
-            #crx-version-indicator-sidebar:hover .crx-tooltip {
-                visibility: visible; opacity: 1;
-            }
+            #crx-version-indicator-sidebar:hover .crx-tooltip { visibility: visible; opacity: 1; }
 
             /* Elementos da UI */
             .crx-group-header {
-                display: flex; justify-content: space-between; align-items: center;
-                font-size: 0.8rem; font-weight: 600; color: white; text-shadow: 1px 1px 2px rgba(0,0,0,0.4);
-                padding: 6px 12px; border-radius: 4px;
-                text-transform: uppercase; margin-top: 10px; cursor: pointer;
-                position: sticky; top: 0; z-index: 10;
+                display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem; font-weight: 600; color: white;
+                text-shadow: 1px 1px 2px rgba(0,0,0,0.4); padding: 6px 12px; border-radius: 4px; text-transform: uppercase;
+                margin-top: 10px; cursor: pointer; position: sticky; top: 0; z-index: 10;
             }
             .crx-group-header .crx-chevron { transition: transform 0.2s ease-in-out; }
             .crx-group-header.collapsed .crx-chevron { transform: rotate(-90deg); }
             .crx-group-container { overflow: hidden; transition: max-height 0.3s ease-in-out; }
-            #crx-header-btn { background-color: #FB923C; color: white !important; border: 1px solid #F97316; padding: 0 12px; height: 32px; border-radius: 0.25rem; cursor: pointer; font-weight: 500; margin-right: 8px; display: flex; align-items: center; }
+            #crx-header-btn {
+                background-color: #FB923C; color: white !important; border: 1px solid #F97316; padding: 0 12px; height: 32px;
+                border-radius: 0.25rem; cursor: pointer; font-weight: 500; margin-right: 8px; display: flex; align-items: center;
+            }
             #crx-header-btn:hover { background-color: #F97316; border-color: #EA580C; }
             #custom-refresh-btn { background-color: #ffffff; border: 1px solid #e5e7eb; color: #525252; transition: transform 0.2s; }
             #custom-refresh-btn:disabled { cursor: not-allowed; opacity: 0.7; }
@@ -127,20 +119,16 @@
     }
 
     // =================================================================================
-    // CAPTURA DE DADOS (FUNÇÃO PRINCIPAL ATUALIZADA)
+    // CAPTURA DE DADOS
     // =================================================================================
     function capturarDadosPagina() {
         console.log("B.Plus!: Iniciando captura de dados com seletor '.active'...");
-
         let analista = '', numero = '', solicitante = '', revenda = '', servicoSelecionado = '';
 
-        // 1. Analista
         analista = document.querySelector('app-chat-list-container > header span.font-medium')?.innerText.trim() || '';
 
-        // 2. Número do Chat
         const chatHeaderElement = document.querySelector('app-chat-agent-header');
         if (chatHeaderElement) {
-            // Acessa o título completo e extrai o número com regex
             const titleElement = chatHeaderElement.querySelector('div > span');
             if(titleElement){
                  const match = titleElement.innerText.match(/#(\d+)/);
@@ -148,11 +136,9 @@
             }
         }
 
-        // 3. Solicitante, Revenda e Serviço (usando o seletor .active)
         const activeChatElement = document.querySelector('app-chat-list-item.active');
         if (activeChatElement) {
             console.log("B.Plus!: Chat ativo encontrado com '.active'. Extraindo dados...");
-
             solicitante = activeChatElement.querySelector('span.truncate.font-medium')?.innerText.trim() || '';
             revenda = activeChatElement.querySelector('span.inline-flex > span.truncate')?.innerText.trim() || '';
             servicoSelecionado = activeChatElement.querySelector('span.shrink-0')?.innerText.trim() || '';
@@ -164,18 +150,14 @@
         return { analista, numero, revenda, solicitante, servicoSelecionado };
     }
 
-
     // =================================================================================
-    // FUNCIONALIDADE 1: REGISTRO DE SERVIÇO INCORRETO
+    // FUNCIONALIDADE: REGISTRO DE SERVIÇO INCORRETO
     // =================================================================================
     function injetarBotaoRegistro() {
         if (document.getElementById('crx-header-btn')) return;
-
         const actionButtonsContainer = document.querySelector('app-chat-agent-header > div:last-of-type');
         if (!actionButtonsContainer) return;
-
         const referenceButton = actionButtonsContainer.querySelector('app-button[icon="tablerX"], app-button[text="Sair da conversa"]');
-
         if (referenceButton) {
             const ourButton = document.createElement('button');
             ourButton.id = 'crx-header-btn';
@@ -275,7 +257,7 @@
     }
 
     // =================================================================================
-    // FUNCIONALIDADE 2: MELHORIAS DE INTERFACE
+    // FUNCIONALIDADE: MELHORIAS DE INTERFACE E AUTO-REFRESH
     // =================================================================================
     function adicionarControles(container) {
         if (!document.getElementById('custom-refresh-btn')) {
@@ -284,26 +266,27 @@
             refreshBtn.title = 'Atualizar listas de chat (forçado)';
             refreshBtn.innerHTML = REFRESH_SVG;
             Object.assign(refreshBtn.style, { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '2rem', width: '2rem', borderRadius: '0.25rem', cursor: 'pointer' });
-            refreshBtn.onclick = () => atualizarListasDeChat(refreshBtn);
+            refreshBtn.onclick = () => atualizarListasDeChat();
             container.appendChild(refreshBtn);
         }
     }
 
-    function atualizarListasDeChat(btn) {
+    function atualizarListasDeChat(isAutoRefresh = false) {
         const othersHeader = Array.from(document.querySelectorAll('app-chat-list > header')).find(h => h.querySelector('span')?.textContent.trim() === 'Outros');
-
         if (!othersHeader) {
-            console.log('B.Plus!: Cabeçalho da lista "Outros" não encontrado para atualização.');
+            if (!isAutoRefresh) console.log('B.Plus!: Cabeçalho da lista "Outros" não encontrado para atualização.');
             return;
         }
-        if (btn && btn.disabled) {
-             console.log('B.Plus!: Atualização já em andamento.');
-             return;
+
+        const refreshButton = document.getElementById('custom-refresh-btn');
+        if (refreshButton && refreshButton.disabled) {
+            console.log('B.Plus!: Atualização já em andamento.');
+            return;
         }
 
-        if (btn) {
-            btn.disabled = true;
-            btn.innerHTML = SPINNER_SVG;
+        if (refreshButton) {
+            refreshButton.disabled = true;
+            refreshButton.innerHTML = SPINNER_SVG;
         }
 
         // Simula o clique para fechar a lista "Outros"
@@ -313,12 +296,33 @@
             // Simula o clique para reabrir a lista
             othersHeader.click();
             setTimeout(() => {
-                if (btn) {
-                    btn.innerHTML = REFRESH_SVG;
-                    btn.disabled = false;
+                if (refreshButton) {
+                    refreshButton.innerHTML = REFRESH_SVG;
+                    refreshButton.disabled = false;
                 }
             }, 1000); // Aguarda a UI se reestabelecer
         }, 300); // Tempo para o sistema processar a primeira ação
+    }
+
+    function performSmartRefresh() {
+        console.log("B.Plus!: Verificando condições para auto-refresh...");
+        const isChatOpen = !!document.querySelector('app-chat-agent-header');
+        const isTyping = !!document.querySelector('textarea:focus, input:focus');
+
+        if (document.hidden || isChatOpen || isTyping) {
+            console.log("B.Plus!: Auto-refresh cancelado (janela inativa, chat aberto ou digitando).");
+            resetIdleTimer(); // Reseta o timer para a próxima contagem
+            return;
+        }
+
+        console.log("B.Plus!: Executando auto-refresh...");
+        atualizarListasDeChat(true);
+        resetIdleTimer(); // Reinicia o ciclo após a execução
+    }
+
+    function resetIdleTimer() {
+        clearTimeout(idleTimer);
+        idleTimer = setTimeout(performSmartRefresh, IDLE_REFRESH_SECONDS * 1000);
     }
 
     function aplicarDestaquesECores() {
@@ -397,11 +401,10 @@
             chatListContainer.appendChild(groupContainer);
             groupContainer.style.maxHeight = isCollapsed ? '0px' : `${initialMaxHeight}px`;
 
-            // Lógica de Ordenação/Priorização mantida
             groupItems.sort((a, b) => {
                 const aP = a.classList.contains('crx-chat-highlight') ? 3 : (a.classList.contains('crx-chat-aguardando') ? 2 : 1);
                 const bP = b.classList.contains('crx-chat-highlight') ? 3 : (b.classList.contains('crx-chat-aguardando') ? 2 : 1);
-                return bP - aP; // Ordena do maior para o menor (prioridade)
+                return bP - aP;
             });
 
             groupItems.forEach(item => groupContainer.appendChild(item));
@@ -410,7 +413,6 @@
         chatListContainer.setAttribute('data-crx-grouped', 'true');
     }
 
-    // ATUALIZADO: Indicador de versão com tooltip de status
     function injetarIndicadorDeVersao() {
         if (document.getElementById('crx-version-indicator-sidebar')) return;
         const helpButton = document.querySelector('div[data-sidebar-option="help"]');
@@ -455,6 +457,12 @@
             injetarIndicadorDeVersao();
         });
         observer.observe(document.body, { childList: true, subtree: true });
+
+        // Inicia a lógica do auto-refresh inteligente por inatividade
+        window.addEventListener('mousemove', resetIdleTimer);
+        window.addEventListener('keypress', resetIdleTimer);
+        window.addEventListener('click', resetIdleTimer); // Adicionado para mais robustez
+        resetIdleTimer();
 
         if (mainInterval) clearInterval(mainInterval);
         mainInterval = setInterval(aplicarCustomizacoes, 1500);
