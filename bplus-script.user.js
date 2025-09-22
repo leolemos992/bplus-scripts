@@ -1,16 +1,17 @@
 // ==UserScript==
 // @name         B.Plus! - Contador de Atendimentos & Melhorias Beemore
 // @namespace    http://tampermonkey.net/
-// @version      7.5
+// @version      7.6
 // @downloadURL  https://raw.githubusercontent.com/leolemos992/bplus-scripts/main/bplus-script.user.js
 // @updateURL    https://raw.githubusercontent.com/leolemos992/bplus-scripts/main/bplus-script.user.js
-// @description  Método de atualização de chat revisado para usar a navegação principal (Home -> Chat), garantindo estabilidade e recarregamento de dados.
+// @description  Adiciona um ícone indicador no cabeçalho que mostra a versão do script ao passar o mouse.
 // @author       JOSE LEONARDO LEMOS
 // @match        https://*.beemore.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_addStyle
 // @grant        GM_getValue
 // @grant        GM_setValue
+// @grant        GM_info
 // @connect      10.1.11.15
 // @connect      est015
 // ==/UserScript==
@@ -19,6 +20,7 @@
     'use strict';
 
     // --- CONFIGURAÇÕES GERAIS ---
+    const SCRIPT_VERSION = GM_info.script.version || '7.6';
     const API_URL = 'http://10.1.11.15/contador/api.php';
     const CATEGORY_COLORS = {
         'Suporte - PDV': '#E57373', 'Suporte - Retaguarda': '#64B5F6', 'Suporte - Fiscal': '#81C784',
@@ -63,6 +65,29 @@
             .crx-spinner { animation: crx-spin 1s linear infinite; }
             .crx-chat-aguardando { background-color: #FFDAB9 !important; border-left: 5px solid #FFA500 !important; }
             .dark .crx-chat-aguardando { background-color: #5a4a3e !important; border-left-color: #ff8c00 !important; }
+
+            /* Ícone de Versão */
+            #crx-version-indicator {
+                position: relative; display: inline-block;
+                color: #525252; background-color: transparent; border: 1px solid #e5e7eb;
+                border-radius: 4px; width: 32px; height: 32px;
+                display: flex; align-items: center; justify-content: center;
+                font-weight: bold; font-size: 14px; cursor: help;
+                margin-right: 8px; /* Adicionado para espaçamento */
+            }
+            .dark #crx-version-indicator {
+                color: #e1e1e1; background-color: #37374a; border-color: #4c445c;
+            }
+            #crx-version-indicator .crx-tooltip {
+                visibility: hidden; width: 120px; background-color: #333;
+                color: #fff; text-align: center; border-radius: 6px;
+                padding: 5px 0; position: absolute; z-index: 100;
+                bottom: 125%; left: 50%; margin-left: -60px;
+                opacity: 0; transition: opacity 0.3s;
+            }
+            #crx-version-indicator:hover .crx-tooltip {
+                visibility: visible; opacity: 1;
+            }
 
             /* Elementos da UI */
             .crx-group-header {
@@ -264,8 +289,21 @@
         container.appendChild(refreshBtn);
     }
 
+    function injetarIndicadorDeVersao() {
+        if (document.getElementById('crx-version-indicator')) return;
+
+        // O novo alvo é o contêiner dos botões à direita no cabeçalho principal
+        const header = document.querySelector('app-navbar > section:last-of-type > div');
+        if (header) {
+            const indicator = document.createElement('div');
+            indicator.id = 'crx-version-indicator';
+            indicator.innerHTML = `B+ <span class="crx-tooltip">B.Plus! v${SCRIPT_VERSION}</span>`;
+            // Insere o indicador como o primeiro item no contêiner
+            header.insertBefore(indicator, header.firstChild);
+        }
+    }
+
     function atualizarListasDeChat(btn) {
-        // **NOVO MÉTODO: Usa a navegação principal da barra lateral**
         const homeButton = document.querySelector('div[data-sidebar-option="dashboard"]');
         const sidebarChatButton = document.querySelector('div[data-sidebar-option="entities.chat"]');
 
@@ -284,25 +322,21 @@
             btn.innerHTML = SPINNER_SVG;
         }
 
-        // Clica no botão Home para trocar de "view"
         homeButton.click();
 
-        // Aguarda a troca de view e então clica de volta no Chat
         setTimeout(() => {
             sidebarChatButton.click();
-            // Aguarda a renderização da lista antes de reativar o botão
             setTimeout(() => {
                 if (btn) {
                     btn.innerHTML = REFRESH_SVG;
                     btn.disabled = false;
                 }
             }, 1500);
-        }, 400); // Um pouco mais de tempo para garantir a troca de contexto
+        }, 400);
     }
 
     function aplicarDestaquesECores() {
         document.querySelectorAll('app-chat-list-item').forEach(item => {
-            // Limpa classes antigas para evitar sobreposição
             item.className = item.className.replace(/\bcrx-category-\S+/g, '');
             item.classList.remove('crx-chat-highlight', 'crx-chat-aguardando');
 
@@ -331,7 +365,7 @@
         const allChatLists = Array.from(chatListContainer.querySelectorAll('app-chat-list'));
         const othersList = allChatLists.find(list => list.querySelector('header > div > span')?.textContent.trim() === 'Outros');
 
-        if (!othersList) return; // Se não houver lista "Outros", não há nada para agrupar
+        if (!othersList) return;
 
         const otherChatsItems = Array.from(othersList.querySelectorAll('app-chat-list-item'));
         const groups = new Map();
@@ -342,13 +376,12 @@
             groups.get(category).push(item);
         });
 
-        // Apaga apenas a lista "Outros" original
         othersList.remove();
 
         const sortedGroups = new Map([...groups.entries()].sort());
 
         sortedGroups.forEach((groupItems, category) => {
-            if (groupItems.length === 0) return; // Não cria grupo vazio
+            if (groupItems.length === 0) return;
 
             const safeCategory = category.replace(/[\s-]+/g, '-').toLowerCase();
             const isCollapsed = collapsedGroups.has(category);
@@ -383,7 +416,6 @@
         chatListContainer.setAttribute('data-crx-grouped', 'true');
     }
 
-
     // =================================================================================
     // LOOP PRINCIPAL E INICIALIZAÇÃO
     // =================================================================================
@@ -403,6 +435,9 @@
             injetarBotaoRegistro();
             observarTags();
         }
+
+        // Garante que o indicador de versão esteja sempre presente
+        injetarIndicadorDeVersao();
     }
 
     function inicializar() {
@@ -412,6 +447,8 @@
             if (targetContainer && !document.getElementById('custom-refresh-btn')) {
                 adicionarBotaoDeAtualizacao(targetContainer);
             }
+            // Garante que o indicador apareça assim que o header estiver disponível
+            injetarIndicadorDeVersao();
         });
         observer.observe(document.body, { childList: true, subtree: true });
         if (mainInterval) clearInterval(mainInterval);
