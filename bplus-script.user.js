@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         B.Plus! - Contador de Atendimentos & Melhorias Beemore
 // @namespace    http://tampermonkey.net/
-// @version      8.0
-// @description  Correção robusta na captura de dados (Revenda e Serviço) para o modal de Serviço Incorreto, adaptando-se à nova estrutura do site.
+// @version      8.1
+// @description  Versão estável com atualização via recolher/expandir, indicador de versão funcional, cores para 'Sem Categoria' e priorização de notificações.
 // @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
 // @grant        GM_xmlhttpRequest
@@ -18,7 +18,7 @@
     'use strict';
 
     // --- CONFIGURAÇÕES GERAIS ---
-    const SCRIPT_VERSION = GM_info.script.version || '8.0';
+    const SCRIPT_VERSION = GM_info.script.version || '8.1';
     const API_URL = 'http://10.1.11.15/contador/api.php';
     const CATEGORY_COLORS = {
         'Suporte - PDV': '#E57373', 'Suporte - Retaguarda': '#64B5F6', 'Suporte - Fiscal': '#81C784',
@@ -75,6 +75,7 @@
                 color: #e1dbfb;
                 background-color: transparent;
                 transition: background-color 0.15s ease-in-out;
+                margin-bottom: 6px;
             }
             #crx-version-indicator-sidebar:hover {
                 background-color: #5e47d0;
@@ -294,7 +295,6 @@
         }
     }
 
-    // ATUALIZADO: Novo método de atualização via recolher/expandir lista "Outros"
     function atualizarListasDeChat(btn) {
         const othersHeader = Array.from(document.querySelectorAll('app-chat-list > header')).find(h => h.querySelector('span')?.textContent.trim() === 'Outros');
 
@@ -420,11 +420,11 @@
     function injetarIndicadorDeVersao() {
         if (document.getElementById('crx-version-indicator-sidebar')) return;
         const helpButton = document.querySelector('div[data-sidebar-option="help"]');
-        if (helpButton) {
+        if (helpButton && helpButton.parentElement) {
             const indicator = document.createElement('div');
             indicator.id = 'crx-version-indicator-sidebar';
             indicator.innerHTML = `B+ <span class="crx-tooltip">B.Plus! v${SCRIPT_VERSION}<br>Status: Operacional</span>`;
-            helpButton.parentNode.insertBefore(indicator, helpButton);
+            helpButton.parentElement.insertBefore(indicator, helpButton);
         }
     }
 
