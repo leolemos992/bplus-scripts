@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         B.Plus! - Contador de Atendimentos & Melhorias Beemore
 // @namespace    http://tampermonkey.net/
-// @version      7.7
+// @version      7.8
 // @downloadURL  https://raw.githubusercontent.com/leolemos992/bplus-scripts/main/bplus-script.user.js
 // @updateURL    https://raw.githubusercontent.com/leolemos992/bplus-scripts/main/bplus-script.user.js
-// @description  Novo método de atualização (filtrar/limpar) e indicador de versão reposicionado para maior estabilidade.
+// @description  Nova cor para 'Sem Categoria', atualização via troca de abas (Configurações), e indicador de versão na barra lateral.
 // @author       JOSE LEONARDO LEMOS
 // @match        https://*.beemore.com/*
 // @grant        GM_xmlhttpRequest
@@ -20,11 +20,13 @@
     'use strict';
 
     // --- CONFIGURAÇÕES GERAIS ---
-    const SCRIPT_VERSION = GM_info.script.version || '7.7';
+    const SCRIPT_VERSION = GM_info.script.version || '7.8';
     const API_URL = 'http://10.1.11.15/contador/api.php';
     const CATEGORY_COLORS = {
         'Suporte - PDV': '#E57373', 'Suporte - Retaguarda': '#64B5F6', 'Suporte - Fiscal': '#81C784',
-        'Suporte - Web': '#FFD54F', 'Suporte - Mobile': '#FFB74D', 'default': '#BDBDBD'
+        'Suporte - Web': '#FFD54F', 'Suporte - Mobile': '#FFB74D',
+        'Sem Categoria': '#9575CD', // Roxo para chats sem categoria (ex: WhatsApp)
+        'default': '#BDBDBD'
     };
     const SPINNER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="crx-spinner"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg>`;
     const REFRESH_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>`;
@@ -66,26 +68,28 @@
             .crx-chat-aguardando { background-color: #FFDAB9 !important; border-left: 5px solid #FFA500 !important; }
             .dark .crx-chat-aguardando { background-color: #5a4a3e !important; border-left-color: #ff8c00 !important; }
 
-            /* Ícone de Versão (NOVO ESTILO) */
-            #crx-version-indicator {
-                position: relative;
-                color: #525252; background-color: #ffffff; border: 1px solid #e5e7eb;
-                border-radius: 4px; width: 32px; height: 32px;
+            /* Ícone de Versão na Barra Lateral (NOVO) */
+            #crx-version-indicator-sidebar {
+                position: relative; cursor: help;
+                width: 36px; height: 36px;
+                border-radius: 6px;
                 display: flex; align-items: center; justify-content: center;
-                font-weight: bold; font-size: 14px; cursor: help;
-                margin-left: 8px; /* Espaçamento */
+                color: #e1dbfb;
+                background-color: transparent;
+                transition: background-color 0.15s ease-in-out;
+                font-weight: bold; font-size: 14px;
             }
-            .dark #crx-version-indicator {
-                color: #e1e1e1; background-color: #37374a; border-color: #4c445c;
+            #crx-version-indicator-sidebar:hover {
+                background-color: #5e47d0;
             }
-            #crx-version-indicator .crx-tooltip {
+            #crx-version-indicator-sidebar .crx-tooltip {
                 visibility: hidden; width: 120px; background-color: #333;
                 color: #fff; text-align: center; border-radius: 6px;
                 padding: 5px 0; position: absolute; z-index: 100;
-                bottom: 125%; left: 50%; margin-left: -60px;
+                left: 125%; top: 50%; transform: translateY(-50%);
                 opacity: 0; transition: opacity 0.3s;
             }
-            #crx-version-indicator:hover .crx-tooltip {
+            #crx-version-indicator-sidebar:hover .crx-tooltip {
                 visibility: visible; opacity: 1;
             }
 
@@ -279,7 +283,7 @@
     // FUNCIONALIDADE 2: MELHORIAS DE INTERFACE
     // =================================================================================
     function adicionarControles(container) {
-        // Adiciona o botão de atualizar
+        // Adiciona apenas o botão de atualizar, o indicador de versão agora fica na sidebar
         if (!document.getElementById('custom-refresh-btn')) {
             let refreshBtn = document.createElement('button');
             refreshBtn.id = 'custom-refresh-btn';
@@ -289,21 +293,16 @@
             refreshBtn.onclick = () => atualizarListasDeChat(refreshBtn);
             container.appendChild(refreshBtn);
         }
-
-        // Adiciona o indicador de versão
-        if (!document.getElementById('crx-version-indicator')) {
-            const indicator = document.createElement('div');
-            indicator.id = 'crx-version-indicator';
-            indicator.innerHTML = `B+ <span class="crx-tooltip">B.Plus! v${SCRIPT_VERSION}</span>`;
-            container.appendChild(indicator);
-        }
     }
 
+    // NOVO MÉTODO: Troca de abas para forçar a atualização
     function atualizarListasDeChat(btn) {
-        const searchInput = document.querySelector('app-input-search input[type="search"]');
+        const allTabs = Array.from(document.querySelectorAll('app-tab'));
+        const chatTab = allTabs.find(tab => tab.innerText.includes('Atendimento'));
+        const configTab = allTabs.find(tab => tab.innerText.includes('Configurações'));
 
-        if (!searchInput) {
-            console.log('B.Plus!: Campo de busca não encontrado.');
+        if (!chatTab || !configTab) {
+            console.log('B.Plus!: Abas "Atendimento" ou "Configurações" não encontradas.');
             return;
         }
 
@@ -317,21 +316,17 @@
             btn.innerHTML = SPINNER_SVG;
         }
 
-        const randomString = `xxx_atualizando_${Date.now()}`;
-        searchInput.value = randomString;
-        searchInput.dispatchEvent(new Event('input', { bubbles: true })); // Simula a digitação
+        configTab.click();
 
         setTimeout(() => {
-            searchInput.value = '';
-            searchInput.dispatchEvent(new Event('input', { bubbles: true })); // Limpa o campo
-
+            chatTab.click();
             setTimeout(() => {
                 if (btn) {
                     btn.innerHTML = REFRESH_SVG;
                     btn.disabled = false;
                 }
-            }, 500); // Espera a UI reagir à limpeza
-        }, 300); // Tempo para o filtro ser aplicado
+            }, 1000); // Aguarda a UI se reestabelecer
+        }, 300); // Tempo para o sistema processar a troca de aba
     }
 
     function aplicarDestaquesECores() {
@@ -341,8 +336,9 @@
 
             const hasAlert = !!item.querySelector('app-icon[icon="tablerAlertCircle"]');
             const isAguardando = !!item.querySelector('span[class*="text-orange"]');
+            // A lógica aprimorada de `getCategory` é usada em `agruparEOrdenarChats`, aqui mantemos a leitura direta
             const categoryElement = item.querySelector('section > div:first-of-type > span:last-of-type');
-            const category = categoryElement ? categoryElement.textContent.trim() : 'default';
+            const category = categoryElement ? categoryElement.textContent.trim() : 'Sem Categoria';
             const categoryClass = `crx-category-${category.replace(/[\s-]+/g, '-').toLowerCase()}`;
 
             item.classList.add(categoryClass);
@@ -354,6 +350,12 @@
     function agruparEOrdenarChats() {
         const chatListContainer = document.querySelector('app-chat-list-container > section');
         if (!chatListContainer || chatListContainer.getAttribute('data-crx-grouped') === 'true') return;
+
+        // Função auxiliar para obter a categoria de forma segura
+        const getCategory = (item) => {
+            const categoryElement = item.querySelector('section > div:first-of-type > span:last-of-type');
+            return categoryElement?.textContent.trim() || 'Sem Categoria';
+        };
 
         collapsedGroups.clear();
         chatListContainer.querySelectorAll('.crx-group-header.collapsed').forEach(header => {
@@ -370,7 +372,7 @@
         const groups = new Map();
 
         otherChatsItems.forEach(item => {
-            const category = item.querySelector('section > div:first-of-type > span:last-of-type')?.textContent.trim() || 'Sem Categoria';
+            const category = getCategory(item);
             if (!groups.has(category)) groups.set(category, []);
             groups.get(category).push(item);
         });
@@ -414,6 +416,19 @@
 
         chatListContainer.setAttribute('data-crx-grouped', 'true');
     }
+    
+    // NOVA FUNÇÃO: Adiciona o indicador de versão na barra lateral
+    function injetarIndicadorDeVersao() {
+        if (document.getElementById('crx-version-indicator-sidebar')) return;
+        const helpButton = document.querySelector('div[data-sidebar-option="help"]');
+        if (helpButton) {
+            const indicator = document.createElement('div');
+            indicator.id = 'crx-version-indicator-sidebar';
+            indicator.innerHTML = `B+ <span class="crx-tooltip">B.Plus! v${SCRIPT_VERSION}</span>`;
+            // Insere o indicador ANTES do botão de ajuda
+            helpButton.parentNode.insertBefore(indicator, helpButton);
+        }
+    }
 
     // =================================================================================
     // LOOP PRINCIPAL E INICIALIZAÇÃO
@@ -434,16 +449,21 @@
             injetarBotaoRegistro();
             observarTags();
         }
+        
+        // Garante que o indicador da sidebar sempre esteja presente
+        injetarIndicadorDeVersao();
     }
 
     function inicializar() {
         injetarEstilos();
         const observer = new MutationObserver(() => {
+            // Busca o container para o botão de refresh
             const targetContainer = document.querySelector('app-chat-list-container > div.flex.items-center');
             if (targetContainer) {
-                // Chama uma função única para adicionar todos os controles
                 adicionarControles(targetContainer);
             }
+            // Busca o container para o indicador de versão na sidebar
+            injetarIndicadorDeVersao();
         });
         observer.observe(document.body, { childList: true, subtree: true });
 
