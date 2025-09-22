@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         B.Plus! - Contador de Atendimentos & Melhorias Beemore
 // @namespace    http://tampermonkey.net/
-// @version      7.0
+// @version      7.1
 // @downloadURL  https://raw.githubusercontent.com/leolemos992/bplus-scripts/main/bplus-script.user.js
 // @updateURL    https://raw.githubusercontent.com/leolemos992/bplus-scripts/main/bplus-script.user.js
-// @description  Cabeçalhos de categoria interativos (recolher/expandir), com contador de chats e cor de fundo. Novo destaque para chats aguardando.
+// @description  Correção no bug de recolher/expandir. O estado dos grupos agora é mantido entre as atualizações da lista.
 // @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
 // @grant        GM_xmlhttpRequest
@@ -26,6 +26,9 @@
     };
     const SPINNER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="crx-spinner"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg>`;
     const REFRESH_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>`;
+
+    // Variável para armazenar o estado dos grupos recolhidos
+    const collapsedGroups = new Set();
 
     // Função auxiliar para converter HEX para RGBA
     function hexToRgba(hex, alpha) {
@@ -72,7 +75,6 @@
             .crx-group-header .crx-chevron { transition: transform 0.2s ease-in-out; }
             .crx-group-header.collapsed .crx-chevron { transform: rotate(-90deg); }
             .crx-group-container { overflow: hidden; transition: max-height 0.3s ease-in-out; }
-            .crx-group-container.collapsed { max-height: 0; }
             #crx-header-btn { background-color: #FB923C; color: white !important; border: 1px solid #F97316; padding: 0 12px; height: 32px; border-radius: 0.25rem; cursor: pointer; font-weight: 500; margin-right: 8px; display: flex; align-items: center; }
             #crx-header-btn:hover { background-color: #F97316; border-color: #EA580C; }
             #custom-refresh-btn { background-color: #ffffff; border: 1px solid #e5e7eb; color: #525252; transition: transform 0.2s; }
@@ -319,10 +321,16 @@
         const othersHeader = Array.from(document.querySelectorAll('app-chat-list > header')).find(h => h.querySelector('span')?.textContent.trim() === 'Outros');
         if (!othersHeader) return;
         const othersContainer = othersHeader.nextElementSibling;
-        if (!othersContainer || othersContainer.getAttribute('data-crx-grouped') === 'true') return;
+        if (!othersContainer) return;
+
+        // Salva o estado atual de recolhimento antes de reconstruir a lista
+        othersContainer.querySelectorAll('.crx-group-header.collapsed').forEach(header => {
+            const categoryName = header.querySelector('span:first-child').textContent.split(' [')[0];
+            collapsedGroups.add(categoryName);
+        });
 
         const items = Array.from(othersContainer.querySelectorAll('app-chat-list-item'));
-        if (items.length === 0) return;
+        if (items.length === 0 && othersContainer.getAttribute('data-crx-grouped') === 'true') return;
 
         const groups = new Map();
         items.forEach(item => {
@@ -332,14 +340,15 @@
         });
 
         const sortedGroups = new Map([...groups.entries()].sort());
-        othersContainer.innerHTML = ''; // Limpa o container original
+        othersContainer.innerHTML = ''; // Limpa o container para reconstrução
 
         sortedGroups.forEach((groupItems, category) => {
             const safeCategory = category.replace(/[\s-]+/g, '-').toLowerCase();
+            const isCollapsed = collapsedGroups.has(category);
 
-            // Cria o Cabeçalho Interativo
+            // Cria o Cabeçalho
             const header = document.createElement('div');
-            header.className = `crx-group-header crx-group-header-${safeCategory}`;
+            header.className = `crx-group-header crx-group-header-${safeCategory} ${isCollapsed ? 'collapsed' : ''}`;
             header.innerHTML = `
                 <span>${category} [${groupItems.length}]</span>
                 <span class="crx-chevron">
@@ -347,25 +356,32 @@
                 </span>
             `;
 
-            // Cria o Container para os itens do grupo
+            // Cria o Container para os itens
             const groupContainer = document.createElement('div');
             groupContainer.className = 'crx-group-container';
-            const initialMaxHeight = groupItems.length * 80; // Estima a altura para a animação
-            groupContainer.style.maxHeight = `${initialMaxHeight}px`;
+            const initialMaxHeight = groupItems.length * 80;
 
+            // Define o evento de clique para recolher/expandir
             header.onclick = () => {
+                const willCollapse = !header.classList.contains('collapsed');
                 header.classList.toggle('collapsed');
-                groupContainer.classList.toggle('collapsed');
-                if (groupContainer.classList.contains('collapsed')) {
-                    groupContainer.style.maxHeight = '0px';
+                groupContainer.style.maxHeight = willCollapse ? '0px' : `${initialMaxHeight}px`;
+
+                // Atualiza a memória de estado (Set)
+                if (willCollapse) {
+                    collapsedGroups.add(category);
                 } else {
-                    groupContainer.style.maxHeight = `${initialMaxHeight}px`;
+                    collapsedGroups.delete(category);
                 }
             };
 
             othersContainer.appendChild(header);
             othersContainer.appendChild(groupContainer);
 
+            // Aplica o estado inicial (recolhido ou expandido)
+            groupContainer.style.maxHeight = isCollapsed ? '0px' : `${initialMaxHeight}px`;
+
+            // Ordena os itens dentro do grupo e os adiciona ao container
             groupItems.sort((a, b) => {
                 const aP = a.classList.contains('crx-chat-highlight') ? 3 : (a.classList.contains('crx-chat-aguardando') ? 2 : 1);
                 const bP = b.classList.contains('crx-chat-highlight') ? 3 : (b.classList.contains('crx-chat-aguardando') ? 2 : 1);
@@ -383,10 +399,6 @@
 
     function aplicarCustomizacoes() {
         aplicarDestaquesECores();
-
-        const groupedContainer = document.querySelector('[data-crx-grouped="true"]');
-        if(groupedContainer) groupedContainer.removeAttribute('data-crx-grouped');
-
         agruparEOrdenarChats();
 
         if (document.querySelector('app-chat-agent-header')) {
