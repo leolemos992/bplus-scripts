@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         B.Plus! - Contador de Atendimentos & Melhorias Beemore
 // @namespace    http://tampermonkey.net/
-// @version      8.2
-// @description  Versão com correção robusta na captura de dados (Revenda, Solicitante, Serviço) para o modal, utilizando seletores mais precisos.
+// @version      8.3
+// @description  Script unificado com a captura de dados aprimorada, usando o seletor '.active' para identificar o chat selecionado de forma mais robusta.
 // @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
 // @grant        GM_xmlhttpRequest
@@ -15,10 +15,10 @@
 // ==/UserScript==
 
 (function() {
-    'use strict';
+    'usestrict';
 
     // --- CONFIGURAÇÕES GERAIS ---
-    const SCRIPT_VERSION = GM_info.script.version || '8.2';
+    const SCRIPT_VERSION = GM_info.script.version || '8.3';
     const API_URL = 'http://10.1.11.15/contador/api.php';
     const CATEGORY_COLORS = {
         'Suporte - PDV': '#E57373', 'Suporte - Retaguarda': '#64B5F6', 'Suporte - Fiscal': '#81C784',
@@ -130,38 +130,34 @@
     // CAPTURA DE DADOS (FUNÇÃO PRINCIPAL ATUALIZADA)
     // =================================================================================
     function capturarDadosPagina() {
-        console.log("B.Plus!: Iniciando captura de dados com nova lógica.");
+        console.log("B.Plus!: Iniciando captura de dados com seletor '.active'...");
 
-        // 1. Analista (Fonte: Cabeçalho da Lista de Chats)
-        const headerElement = document.querySelector('app-chat-list-container > header');
-        let analista = headerElement ? headerElement.querySelector('span.font-medium')?.innerText.trim() : '';
+        let analista = '', numero = '', solicitante = '', revenda = '', servicoSelecionado = '';
 
-        // 2. Número (Fonte: Cabeçalho do Chat Ativo)
+        // 1. Analista
+        analista = document.querySelector('app-chat-list-container > header span.font-medium')?.innerText.trim() || '';
+
+        // 2. Número do Chat
         const chatHeaderElement = document.querySelector('app-chat-agent-header');
-        let numero = chatHeaderElement ? chatHeaderElement.querySelector('span.font-medium')?.innerText.replace('#', '').trim() : '';
+        if (chatHeaderElement) {
+            // Acessa o título completo e extrai o número com regex
+            const titleElement = chatHeaderElement.querySelector('div > span');
+            if(titleElement){
+                 const match = titleElement.innerText.match(/#(\d+)/);
+                 if(match) numero = match[1];
+            }
+        }
 
-        // 3. Solicitante, Revenda e Serviço (Fonte: Item Ativo na Lista de Chats)
-        let solicitante = '';
-        let revenda = '';
-        let servicoSelecionado = '';
-
-        const activeChatElement = document.querySelector('app-chat-list-item[style*="background-color"]');
+        // 3. Solicitante, Revenda e Serviço (usando o seletor .active)
+        const activeChatElement = document.querySelector('app-chat-list-item.active');
         if (activeChatElement) {
-            console.log("B.Plus!: Chat ativo encontrado na lista. Extraindo dados...");
+            console.log("B.Plus!: Chat ativo encontrado com '.active'. Extraindo dados...");
 
-            // Pega o primeiro span com fonte média, que é o nome do solicitante
-            const solicitanteElement = activeChatElement.querySelector('span.font-medium');
-            solicitante = solicitanteElement ? solicitanteElement.innerText.trim() : '';
-
-            // Pega o span que contém a revenda
-            const revendaElement = activeChatElement.querySelector('span.inline-flex > span.truncate');
-            revenda = revendaElement ? revendaElement.innerText.trim() : '';
-
-            // Pega o último span, que é o serviço
-            const servicoElement = activeChatElement.querySelector('span.shrink-0');
-            servicoSelecionado = servicoElement ? servicoElement.innerText.trim() : '';
+            solicitante = activeChatElement.querySelector('span.truncate.font-medium')?.innerText.trim() || '';
+            revenda = activeChatElement.querySelector('span.inline-flex > span.truncate')?.innerText.trim() || '';
+            servicoSelecionado = activeChatElement.querySelector('span.shrink-0')?.innerText.trim() || '';
         } else {
-             console.log("B.Plus!: Nenhum chat ativo encontrado na lista. Alguns campos podem ficar vazios.");
+             console.log("B.Plus!: Nenhum chat com a classe '.active' foi encontrado.");
         }
 
         console.log("B.Plus!: Dados Capturados:", { analista, numero, revenda, solicitante, servicoSelecionado });
