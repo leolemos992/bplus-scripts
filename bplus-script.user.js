@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         B.Plus! - Contador de Atendimentos & Melhorias Beemore
 // @namespace    http://tampermonkey.net/
-// @version      7.4
+// @version      7.5
 // @downloadURL  https://raw.githubusercontent.com/leolemos992/bplus-scripts/main/bplus-script.user.js
 // @updateURL    https://raw.githubusercontent.com/leolemos992/bplus-scripts/main/bplus-script.user.js
-// @description  Novo método de atualização de chat (fecha e reabre a aba) para garantir a busca de novos dados.
+// @description  Método de atualização de chat revisado para usar a navegação principal (Home -> Chat), garantindo estabilidade e recarregamento de dados.
 // @author       JOSE LEONARDO LEMOS
 // @match        https://*.beemore.com/*
 // @grant        GM_xmlhttpRequest
@@ -265,15 +265,12 @@
     }
 
     function atualizarListasDeChat(btn) {
-        // Encontra o botão de Chat na barra lateral esquerda (o gatilho para abrir)
+        // **NOVO MÉTODO: Usa a navegação principal da barra lateral**
+        const homeButton = document.querySelector('div[data-sidebar-option="dashboard"]');
         const sidebarChatButton = document.querySelector('div[data-sidebar-option="entities.chat"]');
 
-        // Encontra a aba de Atendimento atualmente aberta
-        const allTabs = Array.from(document.querySelectorAll('app-tab'));
-        const chatTab = allTabs.find(tab => tab.innerText.includes('Atendimento'));
-
-        if (!sidebarChatButton) {
-            console.log('B.Plus!: Botão de Chat na barra lateral não encontrado.');
+        if (!homeButton || !sidebarChatButton) {
+            console.log('B.Plus!: Botões de navegação (Home/Chat) não encontrados.');
             return;
         }
 
@@ -287,27 +284,20 @@
             btn.innerHTML = SPINNER_SVG;
         }
 
-        // Se a aba de chat estiver aberta, fecha primeiro
-        if (chatTab) {
-            const closeButton = chatTab.querySelector('app-icon[icon="tablerX"]');
-            if (closeButton) {
-                closeButton.click();
-            }
-        }
+        // Clica no botão Home para trocar de "view"
+        homeButton.click();
 
-        // Aguarda um instante para a aba fechar e então clica no botão da sidebar para reabrir
+        // Aguarda a troca de view e então clica de volta no Chat
         setTimeout(() => {
             sidebarChatButton.click();
-            // Aguarda a renderização da lista antes de resetar o botão
+            // Aguarda a renderização da lista antes de reativar o botão
             setTimeout(() => {
                 if (btn) {
                     btn.innerHTML = REFRESH_SVG;
                     btn.disabled = false;
                 }
-                // Não é necessário chamar aplicarCustomizacoes() aqui,
-                // pois o loop principal já fará isso assim que a lista for recriada.
             }, 1500);
-        }, 300);
+        }, 400); // Um pouco mais de tempo para garantir a troca de contexto
     }
 
     function aplicarDestaquesECores() {
