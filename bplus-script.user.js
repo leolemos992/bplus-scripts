@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         B.Plus! - Contador de Atendimentos & Melhorias Beemore
+// @name         B.Plus! - Otimizado
 // @namespace    http://tampermonkey.net/
-// @version      8.5
-// @description  Script unificado com método de atualização estável (Dashboard -> Chat) para evitar o sumiço de chats e auto-refresh inteligente aprimorado.
+// @version      9.0
+// @description  Script otimizado com MutationObserver para atualizações eficientes e em tempo real da lista de chats, eliminando flickering e uso desnecessário de CPU.
 // @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
 // @grant        GM_xmlhttpRequest
@@ -18,7 +18,7 @@
     'use strict';
 
     // --- CONFIGURAÇÕES GERAIS ---
-    const SCRIPT_VERSION = GM_info.script.version || '8.5';
+    const SCRIPT_VERSION = GM_info.script.version || '9.0';
     const IDLE_REFRESH_SECONDS = 90; // Tempo em segundos para o auto-refresh
     const API_URL = 'http://10.1.11.15/contador/api.php';
     const CATEGORY_COLORS = {
@@ -63,13 +63,10 @@
         }
         GM_addStyle(`
             #bplus-custom-styles { display: none; } /* Elemento marcador para evitar reinjeção */
-            /* Animações e Destaques */
             @keyframes crx-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
             .crx-spinner { animation: crx-spin 1s linear infinite; }
             .crx-chat-aguardando { background-color: #FFDAB9 !important; border-left: 5px solid #FFA500 !important; }
             .dark .crx-chat-aguardando { background-color: #5a4a3e !important; border-left-color: #ff8c00 !important; }
-
-            /* Ícone de Versão na Barra Lateral */
             #crx-version-indicator-sidebar {
                 position: relative; cursor: help; width: 36px; height: 36px; border-radius: 6px;
                 display: flex; align-items: center; justify-content: center; color: #e1dbfb;
@@ -82,8 +79,6 @@
                 left: 125%; top: 50%; transform: translateY(-50%); opacity: 0; transition: opacity 0.3s; line-height: 1.4;
             }
             #crx-version-indicator-sidebar:hover .crx-tooltip { visibility: visible; opacity: 1; }
-
-            /* Elementos da UI */
             .crx-group-header {
                 display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem; font-weight: 600; color: white;
                 text-shadow: 1px 1px 2px rgba(0,0,0,0.4); padding: 6px 12px; border-radius: 4px; text-transform: uppercase;
@@ -100,8 +95,6 @@
             #custom-refresh-btn { background-color: #ffffff; border: 1px solid #e5e7eb; color: #525252; transition: transform 0.2s; }
             #custom-refresh-btn:disabled { cursor: not-allowed; opacity: 0.7; }
             .dark #custom-refresh-btn { background-color: #37374a; border-color: #4c445c; color: #e1e1e1; }
-
-            /* Modal (Claro e Escuro) */
             .crx-modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.6); z-index: 9998; display: flex; justify-content: center; align-items: center; }
             .crx-modal-content { background-color: white; padding: 25px; border-radius: 8px; width: 350px; box-shadow: 0 5px 15px rgba(0,0,0,0.3); z-index: 9999; }
             .dark .crx-modal-content { background-color: #2c2c3d; color: #e1e1e1; }
@@ -113,20 +106,16 @@
             .dark .crx-form-group input, .dark .crx-form-group select { background-color: #3e374e !important; color: #e1e1e1 !important; border-color: #4c445c !important; }
             .crx-btn { width: 100%; padding: 10px; background-color: #2c6fbb; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; }
             #crx-status { margin-top: 15px; font-weight: bold; text-align: center; }
-
-            /* Estilos de Categoria */
             ${styles}
         `);
     }
 
     // =================================================================================
-    // CAPTURA DE DADOS
+    // CAPTURA DE DADOS E FUNCIONALIDADES (SEM ALTERAÇÃO)
     // =================================================================================
     function capturarDadosPagina() {
         let analista = '', numero = '', solicitante = '', revenda = '', servicoSelecionado = '';
-
         analista = document.querySelector('app-chat-list-container > header span.font-medium')?.innerText.trim() || '';
-
         const chatHeaderElement = document.querySelector('app-chat-agent-header');
         if (chatHeaderElement) {
             const titleElement = chatHeaderElement.querySelector('div > span');
@@ -135,20 +124,15 @@
                  if(match) numero = match[1];
             }
         }
-
         const activeChatElement = document.querySelector('app-chat-list-item.active');
         if (activeChatElement) {
             solicitante = activeChatElement.querySelector('span.truncate.font-medium')?.innerText.trim() || '';
             revenda = activeChatElement.querySelector('span.inline-flex > span.truncate')?.innerText.trim() || '';
             servicoSelecionado = activeChatElement.querySelector('span.shrink-0')?.innerText.trim() || '';
         }
-
         return { analista, numero, revenda, solicitante, servicoSelecionado };
     }
 
-    // =================================================================================
-    // FUNCIONALIDADE: REGISTRO DE SERVIÇO INCORRETO
-    // =================================================================================
     function injetarBotaoRegistro() {
         if (document.getElementById('crx-header-btn')) return;
         const actionButtonsContainer = document.querySelector('app-chat-agent-header > div:last-of-type');
@@ -210,17 +194,11 @@
                 </div>
             </div>`;
         document.body.insertAdjacentHTML('beforeend', modalHTML);
-        if (document.body.classList.contains('dark')) {
-            document.querySelector('.crx-modal-content').classList.add('dark');
-        }
+        if (document.body.classList.contains('dark')) document.querySelector('.crx-modal-content').classList.add('dark');
         const servicoSelect = document.getElementById('crx-servico-selecionado');
-        for (let option of servicoSelect.options) {
-            if (option.text === data.servicoSelecionado) { option.selected = true; break; }
-        }
+        for (let option of servicoSelect.options) { if (option.text === data.servicoSelecionado) { option.selected = true; break; } }
         document.getElementById('crx-atendimento-form').addEventListener('submit', lidarComSubmitFormulario);
-        document.getElementById('crx-modal').addEventListener('click', (e) => {
-            if (e.target === e.currentTarget) fecharModalRegistro();
-        });
+        document.getElementById('crx-modal').addEventListener('click', (e) => { if (e.target === e.currentTarget) fecharModalRegistro(); });
     }
 
     function fecharModalRegistro() {
@@ -232,10 +210,9 @@
         e.preventDefault();
         const statusDiv = document.getElementById('crx-status');
         const atendimentoData = {
-            action: 'create', numero: document.getElementById('crx-numero').value,
-            revenda: document.getElementById('crx-revenda').value, solicitante: document.getElementById('crx-solicitante').value,
-            servicoSelecionado: document.getElementById('crx-servico-selecionado').value, servicoCorreto: document.getElementById('crx-servico-correto').value,
-            data: new Date().toISOString().split('T')[0], analista: document.getElementById('crx-analista').value
+            action: 'create', numero: document.getElementById('crx-numero').value, revenda: document.getElementById('crx-revenda').value,
+            solicitante: document.getElementById('crx-solicitante').value, servicoSelecionado: document.getElementById('crx-servico-selecionado').value,
+            servicoCorreto: document.getElementById('crx-servico-correto').value, data: new Date().toISOString().split('T')[0], analista: document.getElementById('crx-analista').value
         };
         statusDiv.textContent = 'Salvando...';
         GM_xmlhttpRequest({
@@ -252,12 +229,8 @@
         });
     }
 
-    // =================================================================================
-    // FUNCIONALIDADE: MELHORIAS DE INTERFACE E AUTO-REFRESH
-    // =================================================================================
     function adicionarControles(container) {
         if (document.getElementById('custom-refresh-btn')) return;
-
         let refreshBtn = document.createElement('button');
         refreshBtn.id = 'custom-refresh-btn';
         refreshBtn.title = 'Atualizar listas de chat (forçado)';
@@ -267,30 +240,19 @@
         container.appendChild(refreshBtn);
     }
 
-    /**
-     * NOVO: Método de atualização estável. Navega para o dashboard e volta para a página de chat
-     * para forçar um recarregamento completo dos dados, evitando o sumiço de chats.
-     */
     function atualizarListasDeChat(isAutoRefresh = false) {
         const dashboardButton = document.querySelector('div[data-sidebar-option="dashboard"]');
         const sidebarChatButton = document.querySelector('div[data-sidebar-option="entities.chat"]');
-
         if (!dashboardButton || !sidebarChatButton) {
             if (!isAutoRefresh) console.log('B.Plus!: Botões de navegação (Dashboard/Chat) não encontrados.');
             return;
         }
-
         const refreshButton = document.getElementById('custom-refresh-btn');
-        if (refreshButton && refreshButton.disabled) {
-             console.log('B.Plus!: Atualização já em andamento.');
-             return;
-        }
-
+        if (refreshButton && refreshButton.disabled) return;
         if (refreshButton) {
             refreshButton.disabled = true;
             refreshButton.innerHTML = SPINNER_SVG;
         }
-
         dashboardButton.click();
         setTimeout(() => {
             sidebarChatButton.click();
@@ -299,33 +261,20 @@
                     refreshButton.innerHTML = REFRESH_SVG;
                     refreshButton.disabled = false;
                 }
-            }, 1500); // Tempo para a UI do chat recarregar
-        }, 400); // Tempo para a UI do dashboard carregar
+            }, 1500);
+        }, 400);
     }
 
-    /**
-     * NOVO: Lógica de atualização aprimorada.
-     */
     function performSmartRefresh() {
-        // CONDIÇÃO DE GUARDA: Só roda se estiver na página de chat
-        if (!window.location.href.includes('/chat')) {
+        if (!window.location.href.includes('/chat')) { resetIdleTimer(); return; }
+        const isChatOpen = !!document.querySelector('app-chat-agent-header');
+        const isTyping = !!document.querySelector('textarea:focus, input:focus');
+        if (document.hidden || isChatOpen || isTyping) {
             resetIdleTimer();
             return;
         }
-
-        console.log("B.Plus!: Verificando condições para auto-refresh...");
-        const isChatOpen = !!document.querySelector('app-chat-agent-header');
-        const isTyping = !!document.querySelector('textarea:focus, input:focus');
-
-        if (document.hidden || isChatOpen || isTyping) {
-            console.log("B.Plus!: Auto-refresh cancelado (janela inativa, chat aberto ou digitando).");
-            resetIdleTimer(); // Reseta o timer para a próxima contagem
-            return;
-        }
-
-        console.log("B.Plus!: Executando auto-refresh...");
         atualizarListasDeChat(true);
-        resetIdleTimer(); // Reinicia o ciclo após a execução
+        resetIdleTimer();
     }
 
     function resetIdleTimer() {
@@ -337,13 +286,11 @@
         document.querySelectorAll('app-chat-list-item').forEach(item => {
             item.className = item.className.replace(/\bcrx-category-\S+/g, '');
             item.classList.remove('crx-chat-highlight', 'crx-chat-aguardando');
-
             const hasAlert = !!item.querySelector('app-icon[icon="tablerAlertCircle"]');
             const isAguardando = !!item.querySelector('span[class*="text-orange"]');
             const categoryElement = item.querySelector('section > div:first-of-type > span:last-of-type');
             const category = categoryElement ? categoryElement.textContent.trim() : 'Sem Categoria';
             const categoryClass = `crx-category-${category.replace(/[\s-]+/g, '-').toLowerCase()}`;
-
             item.classList.add(categoryClass);
             item.classList.toggle('crx-chat-highlight', hasAlert && !isAguardando);
             item.classList.toggle('crx-chat-aguardando', isAguardando);
@@ -352,59 +299,48 @@
 
     function agruparEOrdenarChats() {
         const chatListContainer = document.querySelector('app-chat-list-container > section');
-        if (!chatListContainer || chatListContainer.getAttribute('data-crx-grouped') === 'true') return;
+        if (!chatListContainer) return;
+        const getCategory = (item) => item.querySelector('section > div:first-of-type > span:last-of-type')?.textContent.trim() || 'Sem Categoria';
 
-        const getCategory = (item) => {
-            const categoryElement = item.querySelector('section > div:first-of-type > span:last-of-type');
-            return categoryElement?.textContent.trim() || 'Sem Categoria';
-        };
-
-        collapsedGroups.clear();
+        // Mantém o estado dos grupos recolhidos
         chatListContainer.querySelectorAll('.crx-group-header.collapsed').forEach(header => {
             const categoryName = header.querySelector('span:first-child').textContent.split(' [')[0];
             collapsedGroups.add(categoryName);
         });
 
         const allChatLists = Array.from(chatListContainer.querySelectorAll('app-chat-list'));
-        const othersList = allChatLists.find(list => list.querySelector('header > div > span')?.textContent.trim() === 'Outros');
-
-        if (!othersList) return;
-
-        const otherChatsItems = Array.from(othersList.querySelectorAll('app-chat-list-item'));
+        const allItems = allChatLists.flatMap(list => Array.from(list.querySelectorAll('app-chat-list-item')));
         const groups = new Map();
 
-        otherChatsItems.forEach(item => {
+        allItems.forEach(item => {
             const category = getCategory(item);
             if (!groups.has(category)) groups.set(category, []);
             groups.get(category).push(item);
         });
 
-        othersList.remove();
+        // Limpa a lista original para reconstruir com os grupos
+        allChatLists.forEach(list => list.remove());
 
         const sortedGroups = new Map([...groups.entries()].sort());
-
         sortedGroups.forEach((groupItems, category) => {
             if (groupItems.length === 0) return;
-
             const safeCategory = category.replace(/[\s-]+/g, '-').toLowerCase();
             const isCollapsed = collapsedGroups.has(category);
             const header = document.createElement('div');
             header.className = `crx-group-header crx-group-header-${safeCategory} ${isCollapsed ? 'collapsed' : ''}`;
-            header.innerHTML = `
-                <span>${category} [${groupItems.length}]</span>
-                <span class="crx-chevron">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
-                </span>
-            `;
+            header.innerHTML = `<span>${category} [${groupItems.length}]</span><span class="crx-chevron"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></span>`;
+
             const groupContainer = document.createElement('div');
             groupContainer.className = 'crx-group-container';
             const initialMaxHeight = groupItems.length * 80;
+
             header.onclick = () => {
                 const willCollapse = !header.classList.contains('collapsed');
                 header.classList.toggle('collapsed');
                 groupContainer.style.maxHeight = willCollapse ? '0px' : `${initialMaxHeight}px`;
                 if (willCollapse) collapsedGroups.add(category); else collapsedGroups.delete(category);
             };
+
             chatListContainer.appendChild(header);
             chatListContainer.appendChild(groupContainer);
             groupContainer.style.maxHeight = isCollapsed ? '0px' : `${initialMaxHeight}px`;
@@ -414,11 +350,8 @@
                 const bP = b.classList.contains('crx-chat-highlight') ? 3 : (b.classList.contains('crx-chat-aguardando') ? 2 : 1);
                 return bP - aP;
             });
-
             groupItems.forEach(item => groupContainer.appendChild(item));
         });
-
-        chatListContainer.setAttribute('data-crx-grouped', 'true');
     }
 
     function injetarIndicadorDeVersao() {
@@ -427,24 +360,24 @@
         if (helpButton && helpButton.parentElement) {
             const indicator = document.createElement('div');
             indicator.id = 'crx-version-indicator-sidebar';
-            indicator.innerHTML = `B+ <span class="crx-tooltip">B.Plus! v${SCRIPT_VERSION}<br>Status: Operacional</span>`;
+            indicator.innerHTML = `B+ <span class="crx-tooltip">B.Plus! v${SCRIPT_VERSION}<br>Status: Otimizado</span>`;
             helpButton.parentElement.insertBefore(indicator, helpButton);
         }
     }
 
     // =================================================================================
-    // LOOP PRINCIPAL E INICIALIZAÇÃO
+    // LOOP PRINCIPAL E INICIALIZAÇÃO (OTIMIZADO COM MUTATION OBSERVER)
     // =================================================================================
-    let mainInterval;
+    let debounceTimer;
 
-    function aplicarCustomizacoes() {
+    function aplicarCustomizacoesCompletas() {
         aplicarDestaquesECores();
+
         const chatListContainer = document.querySelector('app-chat-list-container > section');
         if (chatListContainer) {
-            if (!chatListContainer.getAttribute('data-crx-grouped') || chatListContainer.querySelector('app-chat-list')) {
-                chatListContainer.removeAttribute('data-crx-grouped');
-                agruparEOrdenarChats();
-            }
+            // Limpa os cabeçalhos antigos antes de reagrupar para evitar duplicação
+            chatListContainer.querySelectorAll('.crx-group-header, .crx-group-container').forEach(el => el.remove());
+            agruparEOrdenarChats();
         }
 
         if (document.querySelector('app-chat-agent-header')) {
@@ -454,26 +387,42 @@
     }
 
     function inicializar() {
+        console.log(`B.Plus! Otimizado v${SCRIPT_VERSION} inicializando...`);
         injetarEstilos();
 
-        // Observer para elementos que aparecem dinamicamente (botão de refresh e versão)
-        const observer = new MutationObserver(() => {
+        const uiObserver = new MutationObserver(() => {
             const targetContainer = document.querySelector('app-chat-list-container > div.flex.items-center');
-            if (targetContainer) {
+            if (targetContainer && !document.getElementById('custom-refresh-btn')) {
                 adicionarControles(targetContainer);
             }
-            injetarIndicadorDeVersao();
+            if (!document.getElementById('crx-version-indicator-sidebar')) {
+                injetarIndicadorDeVersao();
+            }
         });
-        observer.observe(document.body, { childList: true, subtree: true });
+        uiObserver.observe(document.body, { childList: true, subtree: true });
 
-        // Inicia a lógica do auto-refresh inteligente por inatividade
         window.addEventListener('mousemove', resetIdleTimer, { passive: true });
         window.addEventListener('keypress', resetIdleTimer, { passive: true });
         window.addEventListener('click', resetIdleTimer, { passive: true });
         resetIdleTimer();
 
-        if (mainInterval) clearInterval(mainInterval);
-        mainInterval = setInterval(aplicarCustomizacoes, 1500);
+        // Observer principal que assiste a lista de chats por mudanças
+        const chatListObserver = new MutationObserver(() => {
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(aplicarCustomizacoesCompletas, 250); // Debounce de 250ms
+        });
+
+        // Observer inicial que espera a lista de chats aparecer na tela
+        const bodyObserver = new MutationObserver(() => {
+            const chatListContainer = document.querySelector('app-chat-list-container > section');
+            if (chatListContainer) {
+                console.log("B.Plus!: Container da lista de chats encontrado. Iniciando observação.");
+                aplicarCustomizacoesCompletas(); // Roda uma vez na inicialização
+                chatListObserver.observe(chatListContainer, { childList: true, subtree: true });
+                bodyObserver.disconnect(); // Desconecta após encontrar o alvo
+            }
+        });
+        bodyObserver.observe(document.body, { childList: true, subtree: true });
     }
 
     if (document.readyState === 'loading') {
