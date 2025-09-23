@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         B.Plus! - Contador de Atendimentos & Melhorias Beemore
 // @namespace    http://tampermonkey.net/
-// @version      10.2
-// @description  Lógica de agrupamento aprimorada para garantir que todos os chats (incluindo 'Aguardando Atendimento') sejam exibidos corretamente.
+// @version      10.2.1-corrigido
+// @description  Lógica de contagem e filtragem corrigida. O contador 'Todos' agora inclui 'Meus Chats', e os filtros se aplicam a ambas as seções.
 // @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
 // @grant        GM_xmlhttpRequest
@@ -18,7 +18,7 @@
     'use strict';
 
     // --- CONFIGURAÇÕES GERAIS ---
-    const SCRIPT_VERSION = GM_info.script.version || '10.2';
+    const SCRIPT_VERSION = GM_info.script.version || '10.2.1-corrigido';
     const IDLE_REFRESH_SECONDS = 90;
     const API_URL = 'http://10.1.11.15/contador/api.php';
     const SPINNER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="crx-spinner"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg>`;
@@ -459,16 +459,21 @@
             </div>`;
     }
 
+    // A função renderTabsLayout foi a principal modificada para corrigir a contagem e filtragem
     function renderTabsLayout(container, myChats, otherChats) {
         const layoutContainer = document.createElement('div');
         layoutContainer.id = 'crx-tabs-layout-container';
 
+        const allChats = [...myChats, ...otherChats]; // Combina todos os chats para contagem
+
+        // **CORREÇÃO**: Contagem agora é feita em cima de TODOS os chats
         const categoryCounts = new Map();
-        otherChats.forEach(chat => {
+        allChats.forEach(chat => {
             categoryCounts.set(chat.categoria, (categoryCounts.get(chat.categoria) || 0) + 1);
         });
 
-        let tabsHtml = `<div class="crx-filter-tab ${activeFilter === 'Todos' ? 'active' : ''}" data-filter="Todos">Todos <span class="count">${otherChats.length}</span></div>`;
+        // **CORREÇÃO**: A aba "Todos" agora mostra a contagem total correta
+        let tabsHtml = `<div class="crx-filter-tab ${activeFilter === 'Todos' ? 'active' : ''}" data-filter="Todos">Todos <span class="count">${allChats.length}</span></div>`;
         for (const [category, count] of [...categoryCounts.entries()].sort()) {
             tabsHtml += `<div class="crx-filter-tab ${activeFilter === category ? 'active' : ''}" data-filter="${category}">${category.replace('Suporte - ','')} <span class="count">${count}</span></div>`;
         }
@@ -482,14 +487,17 @@
         let chatsHtml = '';
         const isTodosActive = activeFilter === 'Todos';
 
-        if (myChats.length > 0) {
-            chatsHtml += `<div class="crx-group-header">Meus Chats (${myChats.length})</div>`;
-            myChats.sort((a, b) => (b.isAlert ? 2 : b.isWaiting ? 1 : 0) - (a.isAlert ? 2 : a.isWaiting ? 1 : 0))
+        // **CORREÇÃO**: "Meus Chats" agora também são filtrados pela aba ativa
+        const filteredMyChats = myChats.filter(chat => activeFilter === 'Todos' || chat.categoria === activeFilter);
+        if (filteredMyChats.length > 0) {
+            chatsHtml += `<div class="crx-group-header">Meus Chats (${filteredMyChats.length})</div>`;
+            filteredMyChats.sort((a, b) => (b.isAlert ? 2 : b.isWaiting ? 1 : 0) - (a.isAlert ? 2 : a.isWaiting ? 1 : 0))
                    .forEach(chatData => { chatsHtml += createTelegramItemHtml(chatData, isTodosActive); });
         }
 
-        const filteredChats = otherChats.filter(chat => activeFilter === 'Todos' || chat.categoria === activeFilter);
-        filteredChats.sort((a, b) => (b.isAlert ? 2 : b.isWaiting ? 1 : 0) - (a.isAlert ? 2 : a.isWaiting ? 1 : 0))
+        // A filtragem dos outros chats já estava correta
+        const filteredOtherChats = otherChats.filter(chat => activeFilter === 'Todos' || chat.categoria === activeFilter);
+        filteredOtherChats.sort((a, b) => (b.isAlert ? 2 : b.isWaiting ? 1 : 0) - (a.isAlert ? 2 : a.isWaiting ? 1 : 0))
                      .forEach(chatData => { chatsHtml += createTelegramItemHtml(chatData, isTodosActive); });
 
         chatListContainer.innerHTML = chatsHtml;
@@ -500,7 +508,7 @@
         container.querySelectorAll('.crx-filter-tab').forEach(tab => {
             tab.onclick = () => {
                 activeFilter = tab.getAttribute('data-filter');
-                renderCustomChatList(); // Re-renderiza tudo
+                renderCustomChatList(); // Re-renderiza tudo com o novo filtro
             };
         });
     }
