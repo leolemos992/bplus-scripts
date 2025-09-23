@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         B.Plus! - Contador de Atendimentos & Melhorias Beemore
 // @namespace    http://tampermonkey.net/
-// @version      8.7
-// @description  Implementa barra de rolagem funcional em 'Meus chats' via JavaScript para maior robustez e remove o botão de atualizar.
+// @version      8.8
+// @description  Adiciona barra de rolagem individual para cada grupo de chat (Meus Chats, Fiscal, etc.) para otimizar o espaço de forma eficaz.
 // @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
 // @grant        GM_xmlhttpRequest
@@ -18,9 +18,9 @@
     'use strict';
 
     // --- CONFIGURAÇÕES GERAIS ---
-    const SCRIPT_VERSION = GM_info.script.version || '8.7';
+    const SCRIPT_VERSION = GM_info.script.version || '8.8';
     const IDLE_REFRESH_SECONDS = 90; // Tempo em segundos para o auto-refresh
-    const MAX_MY_CHATS_HEIGHT_ITEMS = 4; // Máximo de chats visíveis em 'Meus Chats' antes da barra de rolagem
+    const MAX_GROUP_HEIGHT_ITEMS = 6; // Máximo de chats visíveis por grupo antes da rolagem
     const API_URL = 'http://10.1.11.15/contador/api.php';
     const CATEGORY_COLORS = {
         'Suporte - PDV': '#E57373', 'Suporte - Retaguarda': '#64B5F6', 'Suporte - Fiscal': '#81C784',
@@ -30,11 +30,14 @@
     };
     const SPINNER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="crx-spinner"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg>`;
     const REFRESH_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>`;
+    const COMPACT_VIEW_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg>`;
+
 
     // --- VARIÁVEIS DE ESTADO ---
     const collapsedGroups = new Set();
     let idleTimer; // Variável para o timer de inatividade
     let isAutoRefreshing = false; // Flag para controlar o processo de auto-refresh
+    let isCompactMode = GM_getValue('compactMode', false); // Estado do modo compacto
 
     // Função auxiliar para converter HEX para RGBA
     function hexToRgba(hex, alpha) {
@@ -66,18 +69,30 @@
         GM_addStyle(`
             #bplus-custom-styles { display: none; } /* Elemento marcador para evitar reinjeção */
 
-            /* [NOVO v8.7] ESTILO PARA BARRA DE ROLAGEM (aplicado via JS) */
-            .crx-scrollable-my-chats {
-                max-height: calc(${MAX_MY_CHATS_HEIGHT_ITEMS} * 72px); /* 72px é a altura aproximada de cada item */
+            /* [NOVO v8.8] BARRA DE ROLAGEM PARA TODOS OS GRUPOS E LISTAS */
+            .crx-group-container, app-chat-list > section {
+                max-height: calc(${MAX_GROUP_HEIGHT_ITEMS} * 72px); /* 72px = altura de um item normal */
                 overflow-y: auto !important;
                 overflow-x: hidden !important;
-                padding-right: 5px; /* Espaço para a barra de rolagem */
+                padding-right: 5px;
             }
+            .crx-compact-view .crx-group-container, .crx-compact-view app-chat-list > section {
+                max-height: calc(${MAX_GROUP_HEIGHT_ITEMS} * 40px); /* 40px = altura de um item compacto */
+            }
+
             /* Estilização da barra de rolagem */
-            .crx-scrollable-my-chats::-webkit-scrollbar { width: 6px; }
-            .crx-scrollable-my-chats::-webkit-scrollbar-track { background: transparent; }
-            .crx-scrollable-my-chats::-webkit-scrollbar-thumb { background-color: #ccc; border-radius: 10px; }
-            .dark .crx-scrollable-my-chats::-webkit-scrollbar-thumb { background-color: #4f4f5a; }
+            .crx-group-container::-webkit-scrollbar, app-chat-list > section::-webkit-scrollbar { width: 6px; }
+            .crx-group-container::-webkit-scrollbar-track, app-chat-list > section::-webkit-scrollbar-track { background: transparent; }
+            .crx-group-container::-webkit-scrollbar-thumb, app-chat-list > section::-webkit-scrollbar-thumb { background-color: #ccc; border-radius: 10px; }
+            .dark .crx-group-container::-webkit-scrollbar-thumb, .dark app-chat-list > section::-webkit-scrollbar-thumb { background-color: #4f4f5a; }
+
+            /* [NOVO v8.8] Estilos para o Modo Compacto */
+            .crx-compact-view app-chat-list-item { height: 40px !important; }
+            .crx-compact-view app-chat-list-item > section > div:first-of-type { display: flex; align-items: center; }
+            .crx-compact-view app-chat-list-item .flex.flex-col { display: none; } /* Oculta a segunda linha de texto */
+            .crx-control-btn.active { background-color: #e0e0e0; border-color: #adadad; }
+            .dark .crx-control-btn.active { background-color: #4a4a61; border-color: #6a627e; }
+
 
             /* Animações e Destaques */
             @keyframes crx-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
@@ -271,17 +286,34 @@
     // =================================================================================
     // FUNCIONALIDADE: MELHORIAS DE INTERFACE E AUTO-REFRESH
     // =================================================================================
+    function toggleCompactMode() {
+        isCompactMode = !isCompactMode;
+        GM_setValue('compactMode', isCompactMode);
+        document.body.classList.toggle('crx-compact-view', isCompactMode);
+        const compactBtn = document.getElementById('crx-compact-toggle');
+        if(compactBtn) {
+            compactBtn.classList.toggle('active', isCompactMode);
+        }
+    }
+
     function adicionarControles(container) {
-        // **[REMOVIDO v8.7]** O botão de atualização manual foi removido.
-        const refreshBtn = document.getElementById('crx-refresh-btn');
-        if (refreshBtn) {
-            refreshBtn.remove();
+        // [REMOVIDO] O botão de atualização manual não é mais necessário.
+        if (document.getElementById('crx-refresh-btn')) {
+            document.getElementById('crx-refresh-btn').remove();
         }
 
-        // Remove o botão de modo compacto se ele ainda existir de uma versão anterior
-        const compactBtn = document.getElementById('crx-compact-toggle');
-        if (compactBtn) {
-            compactBtn.remove();
+        // [NOVO v8.8] Adiciona botão de modo compacto
+        if (!document.getElementById('crx-compact-toggle')) {
+            const compactBtn = document.createElement('button');
+            compactBtn.id = 'crx-compact-toggle';
+            compactBtn.className = 'crx-control-btn';
+            compactBtn.title = 'Alternar visualização compacta';
+            compactBtn.innerHTML = COMPACT_VIEW_SVG;
+            compactBtn.onclick = toggleCompactMode;
+            if (isCompactMode) {
+                compactBtn.classList.add('active');
+            }
+            container.appendChild(compactBtn);
         }
     }
 
@@ -416,7 +448,7 @@
             `;
             const groupContainer = document.createElement('div');
             groupContainer.className = 'crx-group-container';
-            const initialMaxHeight = groupItems.length * 80;
+            const initialMaxHeight = groupItems.length * (isCompactMode ? 40 : 80); // Considera modo compacto
             header.onclick = () => {
                 const willCollapse = !header.classList.contains('collapsed');
                 header.classList.toggle('collapsed');
@@ -438,24 +470,6 @@
 
         chatListContainer.setAttribute('data-crx-grouped', 'true');
     }
-    
-    // **[NOVO v8.7]** Função para aplicar a classe de rolagem dinamicamente
-    function aplicarBarraDeRolagem() {
-        const allLists = document.querySelectorAll('app-chat-list');
-        allLists.forEach(list => {
-            const header = list.querySelector('header span');
-            const section = list.querySelector('section');
-            if (header && section) {
-                if (header.innerText.trim().toLowerCase() === 'meus chats') {
-                    // Adiciona a classe para ativar a rolagem
-                    section.classList.add('crx-scrollable-my-chats');
-                } else {
-                    // Garante que a classe não esteja em outras listas
-                    section.classList.remove('crx-scrollable-my-chats');
-                }
-            }
-        });
-    }
 
     function injetarIndicadorDeVersao() {
         if (document.getElementById('crx-version-indicator-sidebar')) return;
@@ -476,8 +490,7 @@
     function aplicarCustomizacoes() {
         aplicarDestaquesECores();
 
-        // **[NOVO v8.7]** Aplica a barra de rolagem a cada ciclo
-        aplicarBarraDeRolagem();
+        // [REMOVIDO v8.8] A função aplicarBarraDeRolagem() foi removida pois o CSS agora cuida disso.
 
         const chatListContainer = document.querySelector('app-chat-list-container > section');
         if (chatListContainer) {
@@ -495,6 +508,11 @@
 
     function inicializar() {
         injetarEstilos();
+
+        // [NOVO v8.8] Aplica a classe de modo compacto na inicialização, se estiver ativa
+        if (isCompactMode) {
+            document.body.classList.add('crx-compact-view');
+        }
 
         // Observer para elementos que aparecem dinamicamente
         const observer = new MutationObserver(() => {
