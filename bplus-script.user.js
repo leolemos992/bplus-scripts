@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         B.Plus! - Contador de Atendimentos & Melhorias Beemore
 // @namespace    http://tampermonkey.net/
-// @version      8.2
-// @description  Modo Compacto reconstruído para estabilidade, mais nova cor para 'Sem Categoria' e método de atualização robusto.
-// @author       Sua Equipe & Gemini
+// @version      8.3
+// @description  Modo Compacto reconstruído com CSS para estabilidade visual, mais nova cor para 'Sem Categoria' e método de atualização robusto.
+// @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_addStyle
@@ -18,7 +18,7 @@
     'use strict';
 
     // --- CONFIGURAÇÕES GERAIS ---
-    const SCRIPT_VERSION = GM_info.script.version || '8.2';
+    const SCRIPT_VERSION = GM_info.script.version || '8.3';
     const IDLE_REFRESH_SECONDS = 90; // Tempo em segundos para o auto-refresh
     const API_URL = 'http://10.1.11.15/contador/api.php';
     const CATEGORY_COLORS = {
@@ -119,20 +119,56 @@
             .crx-btn { width: 100%; padding: 10px; background-color: #2c6fbb; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; }
             #crx-status { margin-top: 15px; font-weight: bold; text-align: center; }
 
-            /* MODO COMPACTO (NOVA LÓGICA) */
-            .crx-compact-text {
-                font-size: 13px;
-                padding: 0 5px;
+            /* MODO COMPACTO (LÓGICA CSS RECONSTRUÍDA) */
+            .crx-chat-list-container.crx-compact-view app-chat-list-item {
+                height: 45px !important; /* Altura reduzida */
+            }
+            /* Esconde o ícone de perfil do solicitante */
+            .crx-chat-list-container.crx-compact-view app-chat-list-item > div:first-of-type {
+                display: none !important;
+            }
+            /* Esconde as informações do analista (última div na seção principal) */
+            .crx-chat-list-container.crx-compact-view app-chat-list-item section > section > div:last-child {
+                display: none !important;
+            }
+            /* Esconde o tipo de serviço */
+            .crx-chat-list-container.crx-compact-view app-chat-list-item section > div > span.shrink-0 {
+                display: none !important;
+            }
+
+            /* Reajusta o layout do conteúdo principal */
+            .crx-chat-list-container.crx-compact-view app-chat-list-item section > section {
+                display: flex;
+                align-items: center;
+                height: 100%;
+            }
+            /* Ajusta a largura do nome do solicitante e revenda para ocupar espaço */
+            .crx-chat-list-container.crx-compact-view app-chat-list-item section > section > div:first-of-type {
+                display: flex;
+                flex-direction: row;
+                align-items: center;
+                gap: 5px; /* Espaço entre solicitante e revenda */
                 white-space: nowrap;
                 overflow: hidden;
                 text-overflow: ellipsis;
-                height: 100%;
-                display: flex;
-                align-items: center;
+                width: calc(100% - 20px); /* Ajuste para não colidir com o ícone de alerta */
             }
-            .crx-chat-list-container.crx-compact-view app-chat-list-item { height: 45px !important; }
-            .crx-chat-list-container.crx-compact-view .crx-original-content { display: none; }
-            .crx-chat-list-container:not(.crx-compact-view) .crx-compact-text { display: none; }
+            /* Adiciona o hífen entre solicitante e revenda via CSS */
+            .crx-chat-list-container.crx-compact-view app-chat-list-item span.font-medium::after {
+                content: ' - ';
+                font-weight: normal;
+                color: #666; /* Cor do hífen */
+            }
+            .dark .crx-chat-list-container.crx-compact-view app-chat-list-item span.font-medium::after {
+                color: #aaa;
+            }
+            /* Reposiciona o ícone de alerta/notificação */
+            .crx-chat-list-container.crx-compact-view app-chat-list-item span.justify-between {
+                position: absolute;
+                right: 12px;
+                top: 50%; /* Centraliza verticalmente */
+                transform: translateY(-50%); /* Ajuste fino para centralização */
+            }
 
             /* Estilos de Categoria */
             ${styles}
@@ -297,41 +333,27 @@
             compactBtn.onclick = () => {
                 isCompactMode = !isCompactMode;
                 GM_setValue('compactMode', isCompactMode);
-                compactBtn.classList.toggle('active', isCompactMode);
-                document.querySelector('app-chat-list-container > section')?.classList.toggle('crx-compact-view', isCompactMode);
+                aplicarVisualizacaoCompacta(); // Aplica a classe imediatamente
+                compactBtn.classList.toggle('active', isCompactMode); // Atualiza o estado visual do botão
+                // A altura do grupo precisa ser recalculada se houver grupos colapsados
+                document.querySelectorAll('.crx-group-header').forEach(header => {
+                    const groupContainer = header.nextElementSibling;
+                    if (groupContainer && groupContainer.classList.contains('crx-group-container')) {
+                        if (!header.classList.contains('collapsed')) { // Só recalcula se não estiver colapsado
+                             const itemCount = groupContainer.children.length;
+                             groupContainer.style.maxHeight = `${itemCount * (isCompactMode ? 45 : 80)}px`;
+                        }
+                    }
+                });
             };
             container.appendChild(compactBtn);
         }
     }
 
-    // Função para criar os elementos do modo compacto se não existirem
-    function prepararItensParaModoCompacto() {
-        const chatItems = document.querySelectorAll('app-chat-list-item:not([data-crx-compact-ready])');
-        chatItems.forEach(item => {
-            const originalContentWrapper = item.querySelector('div.flex.items-center.h-full.w-full.gap-3.px-2'); // Seletor mais específico
-            const originalContent = item.querySelector('section');
-
-            if (originalContent && originalContentWrapper) {
-                originalContent.classList.add('crx-original-content');
-
-                const solicitante = originalContent.querySelector('span.font-medium')?.innerText.trim() || '';
-                const revenda = originalContent.querySelector('span.inline-flex > span.truncate')?.innerText.trim() || '';
-
-                if (solicitante && revenda) {
-                    const compactDiv = document.createElement('div');
-                    compactDiv.className = 'crx-compact-text';
-                    compactDiv.innerText = `${solicitante} - ${revenda}`;
-                    // Insere o modo compacto dentro do wrapper principal do item
-                    originalContentWrapper.appendChild(compactDiv);
-                }
-            }
-            item.setAttribute('data-crx-compact-ready', 'true');
-        });
-
-        // Aplica a classe mestre no container principal
+    // Aplica ou remove a classe mestra de modo compacto no container principal
+    function aplicarVisualizacaoCompacta() {
         const container = document.querySelector('app-chat-list-container > section');
         if (container) {
-            container.classList.add('crx-chat-list-container'); // Garante que a classe principal exista
             container.classList.toggle('crx-compact-view', isCompactMode);
         }
     }
@@ -428,11 +450,14 @@
             return categoryElement?.textContent.trim() || 'Sem Categoria';
         };
 
-        collapsedGroups.clear();
+        // Captura o estado atual dos grupos colapsados
+        const currentCollapsedGroups = new Set();
         chatListContainer.querySelectorAll('.crx-group-header.collapsed').forEach(header => {
             const categoryName = header.querySelector('span:first-child').textContent.split(' [')[0];
-            collapsedGroups.add(categoryName);
+            currentCollapsedGroups.add(categoryName);
         });
+        collapsedGroups.clear(); // Limpa o Set global
+        currentCollapsedGroups.forEach(group => collapsedGroups.add(group)); // Atualiza com os grupos atuais
 
         const allChatLists = Array.from(chatListContainer.querySelectorAll('app-chat-list'));
         const othersList = allChatLists.find(list => list.querySelector('header > div > span')?.textContent.trim() === 'Outros');
@@ -448,7 +473,7 @@
             groups.get(category).push(item);
         });
 
-        othersList.remove();
+        othersList.remove(); // Remove a lista original "Outros"
 
         const sortedGroups = new Map([...groups.entries()].sort());
 
@@ -467,7 +492,8 @@
             `;
             const groupContainer = document.createElement('div');
             groupContainer.className = 'crx-group-container';
-            const initialMaxHeight = groupItems.length * (isCompactMode ? 45 : 80); // Ajusta altura para modo compacto
+            // Ajusta a altura inicial para o modo compacto
+            const initialMaxHeight = groupItems.length * (isCompactMode ? 45 : 80);
             header.onclick = () => {
                 const willCollapse = !header.classList.contains('collapsed');
                 header.classList.toggle('collapsed');
@@ -508,12 +534,13 @@
 
     function aplicarCustomizacoes() {
         aplicarDestaquesECores();
-        prepararItensParaModoCompacto(); // Prepara os itens para o modo compacto
+        aplicarVisualizacaoCompacta(); // Garante que a classe de modo compacto está aplicada
 
         const chatListContainer = document.querySelector('app-chat-list-container > section');
         if (chatListContainer) {
+            // Se o container ainda tem a lista original do Beemore ou não foi agrupado ainda, reagrupa.
             if (!chatListContainer.getAttribute('data-crx-grouped') || chatListContainer.querySelector('app-chat-list')) {
-                chatListContainer.removeAttribute('data-crx-grouped');
+                chatListContainer.removeAttribute('data-crx-grouped'); // Reseta para reagrupar
                 agruparEOrdenarChats();
             }
         }
@@ -522,6 +549,7 @@
             injetarBotaoRegistro();
             observarTags();
         }
+        injetarIndicadorDeVersao();
     }
 
     function inicializar() {
@@ -533,6 +561,8 @@
             if (targetContainer) {
                 adicionarControles(targetContainer);
             }
+            // Aplica o modo compacto inicial aqui também, caso os elementos já estejam no DOM
+            aplicarVisualizacaoCompacta();
             injetarIndicadorDeVersao();
         });
         observer.observe(document.body, { childList: true, subtree: true });
@@ -544,7 +574,7 @@
         resetIdleTimer();
 
         if (mainInterval) clearInterval(mainInterval);
-        mainInterval = setInterval(aplicarCustomizacoes, 1500);
+        mainInterval = setInterval(aplicarCustomizacoes, 1500); // Executa a cada 1.5s
     }
 
     if (document.readyState === 'loading') {
