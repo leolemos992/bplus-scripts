@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         B.Plus! - Contador de Atendimentos & Melhorias Beemore
 // @namespace    http://tampermonkey.net/
-// @version      8.8
-// @description  Adiciona barra de rolagem individual para cada grupo de chat (Meus Chats, Fiscal, etc.) para otimizar o espaço de forma eficaz.
+// @version      8.9
+// @description  Implementa uma nova interface de lista de chats ("Máscara") para total controle visual, garantindo barra de rolagem funcional e modo compacto estável.
 // @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
 // @grant        GM_xmlhttpRequest
@@ -18,7 +18,7 @@
     'use strict';
 
     // --- CONFIGURAÇÕES GERAIS ---
-    const SCRIPT_VERSION = GM_info.script.version || '8.8';
+    const SCRIPT_VERSION = GM_info.script.version || '8.9';
     const IDLE_REFRESH_SECONDS = 90; // Tempo em segundos para o auto-refresh
     const MAX_GROUP_HEIGHT_ITEMS = 6; // Máximo de chats visíveis por grupo antes da rolagem
     const API_URL = 'http://10.1.11.15/contador/api.php';
@@ -34,7 +34,6 @@
 
 
     // --- VARIÁVEIS DE ESTADO ---
-    const collapsedGroups = new Set();
     let idleTimer; // Variável para o timer de inatividade
     let isAutoRefreshing = false; // Flag para controlar o processo de auto-refresh
     let isCompactMode = GM_getValue('compactMode', false); // Estado do modo compacto
@@ -67,32 +66,38 @@
             `;
         }
         GM_addStyle(`
-            #bplus-custom-styles { display: none; } /* Elemento marcador para evitar reinjeção */
+            #bplus-custom-styles { display: none; } /* Elemento marcador */
 
-            /* [NOVO v8.8] BARRA DE ROLAGEM PARA TODOS OS GRUPOS E LISTAS */
-            .crx-group-container, app-chat-list > section {
-                max-height: calc(${MAX_GROUP_HEIGHT_ITEMS} * 72px); /* 72px = altura de um item normal */
+            /* [NOVO v8.9] Esconde a lista original para dar lugar à nossa "Máscara" */
+            app-chat-list-container > section > app-chat-list { display: none !important; }
+
+            /* [NOVO v8.9] Container para nossa nova lista */
+            #crx-chat-list-mask { padding: 0 8px; }
+
+            /* [ATUALIZADO v8.9] Barra de Rolagem agora aplicada apenas aos nossos containers */
+            .crx-group-container {
+                max-height: calc(${MAX_GROUP_HEIGHT_ITEMS} * 72px); /* 72px = altura normal */
                 overflow-y: auto !important;
                 overflow-x: hidden !important;
                 padding-right: 5px;
+                transition: max-height 0.3s ease-in-out;
             }
-            .crx-compact-view .crx-group-container, .crx-compact-view app-chat-list > section {
-                max-height: calc(${MAX_GROUP_HEIGHT_ITEMS} * 40px); /* 40px = altura de um item compacto */
+            .crx-compact-view .crx-group-container {
+                max-height: calc(${MAX_GROUP_HEIGHT_ITEMS} * 40px); /* 40px = altura compacta */
             }
 
             /* Estilização da barra de rolagem */
-            .crx-group-container::-webkit-scrollbar, app-chat-list > section::-webkit-scrollbar { width: 6px; }
-            .crx-group-container::-webkit-scrollbar-track, app-chat-list > section::-webkit-scrollbar-track { background: transparent; }
-            .crx-group-container::-webkit-scrollbar-thumb, app-chat-list > section::-webkit-scrollbar-thumb { background-color: #ccc; border-radius: 10px; }
-            .dark .crx-group-container::-webkit-scrollbar-thumb, .dark app-chat-list > section::-webkit-scrollbar-thumb { background-color: #4f4f5a; }
+            .crx-group-container::-webkit-scrollbar { width: 6px; }
+            .crx-group-container::-webkit-scrollbar-track { background: transparent; }
+            .crx-group-container::-webkit-scrollbar-thumb { background-color: #ccc; border-radius: 10px; }
+            .dark .crx-group-container::-webkit-scrollbar-thumb { background-color: #4f4f5a; }
 
-            /* [NOVO v8.8] Estilos para o Modo Compacto */
+            /* Estilos para o Modo Compacto */
             .crx-compact-view app-chat-list-item { height: 40px !important; }
             .crx-compact-view app-chat-list-item > section > div:first-of-type { display: flex; align-items: center; }
             .crx-compact-view app-chat-list-item .flex.flex-col { display: none; } /* Oculta a segunda linha de texto */
             .crx-control-btn.active { background-color: #e0e0e0; border-color: #adadad; }
             .dark .crx-control-btn.active { background-color: #4a4a61; border-color: #6a627e; }
-
 
             /* Animações e Destaques */
             @keyframes crx-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
@@ -122,7 +127,6 @@
             }
             .crx-group-header .crx-chevron { transition: transform 0.2s ease-in-out; }
             .crx-group-header.collapsed .crx-chevron { transform: rotate(-90deg); }
-            .crx-group-container { overflow: hidden; transition: max-height 0.3s ease-in-out; }
             #crx-header-btn {
                 background-color: #FB923C; color: white !important; border: 1px solid #F97316; padding: 0 12px; height: 32px;
                 border-radius: 0.25rem; cursor: pointer; font-weight: 500; margin-right: 8px; display: flex; align-items: center;
@@ -297,12 +301,6 @@
     }
 
     function adicionarControles(container) {
-        // [REMOVIDO] O botão de atualização manual não é mais necessário.
-        if (document.getElementById('crx-refresh-btn')) {
-            document.getElementById('crx-refresh-btn').remove();
-        }
-
-        // [NOVO v8.8] Adiciona botão de modo compacto
         if (!document.getElementById('crx-compact-toggle')) {
             const compactBtn = document.createElement('button');
             compactBtn.id = 'crx-compact-toggle';
@@ -317,10 +315,6 @@
         }
     }
 
-    /**
-     * MÉTODO DE ATUALIZAÇÃO ESTÁVEL. Navega para o dashboard e volta para a página de chat
-     * para forçar um recarregamento completo dos dados.
-     */
     function atualizarListasDeChat(isAutoRefresh = false) {
         const dashboardButton = document.querySelector('div[data-sidebar-option="dashboard"]');
         const sidebarChatButton = document.querySelector('div[data-sidebar-option="entities.chat"]');
@@ -353,11 +347,7 @@
         }, 400); // Tempo para a UI do dashboard carregar
     }
 
-    /**
-     * LÓGICA DE ATUALIZAÇÃO INTELIGENTE.
-     */
     function performSmartRefresh() {
-        // CONDIÇÃO DE GUARDA: Só roda se estiver na página de chat
         if (!window.location.href.includes('/chat')) {
             resetIdleTimer();
             return;
@@ -369,13 +359,13 @@
 
         if (document.hidden || isChatOpen || isTyping) {
             console.log("B.Plus!: Auto-refresh cancelado (janela inativa, chat aberto ou digitando).");
-            resetIdleTimer(); // Reseta o timer para a próxima contagem
+            resetIdleTimer();
             return;
         }
 
         console.log("B.Plus!: Executando auto-refresh...");
         atualizarListasDeChat(true);
-        resetIdleTimer(); // Reinicia o ciclo após a execução
+        resetIdleTimer();
     }
 
     function resetIdleTimer() {
@@ -400,36 +390,68 @@
         });
     }
 
+    /**
+     * [NOVO v8.9] Lógica de agrupamento e renderização da "Máscara".
+     * Esta função lê os chats da DOM original (que está escondida via CSS),
+     * e recria a lista dentro do nosso próprio container para controle total.
+     */
     function agruparEOrdenarChats() {
-        const chatListContainer = document.querySelector('app-chat-list-container > section');
-        if (!chatListContainer || chatListContainer.getAttribute('data-crx-grouped') === 'true') return;
+        const originalContainer = document.querySelector('app-chat-list-container > section');
+        if (!originalContainer) return;
+
+        // 1. Encontra ou cria nosso container customizado ("a máscara")
+        let crxMask = document.getElementById('crx-chat-list-mask');
+        if (!crxMask) {
+            crxMask = document.createElement('div');
+            crxMask.id = 'crx-chat-list-mask';
+            originalContainer.appendChild(crxMask);
+        }
 
         const getCategory = (item) => {
-            const categoryElement = item.querySelector('section > div:first-of-type > span:last-of-type');
-            return categoryElement?.textContent.trim() || 'Sem Categoria';
+            const el = item.querySelector('section > div:first-of-type > span:last-of-type');
+            return el?.textContent.trim() || 'Sem Categoria';
         };
 
-        collapsedGroups.clear();
-        chatListContainer.querySelectorAll('.crx-group-header.collapsed').forEach(header => {
+        // 2. Preserva o estado de recolhimento dos grupos antes de limpar
+        const collapsedGroups = new Set();
+        crxMask.querySelectorAll('.crx-group-header.collapsed').forEach(header => {
             const categoryName = header.querySelector('span:first-child').textContent.split(' [')[0];
             collapsedGroups.add(categoryName);
         });
 
-        const allChatLists = Array.from(chatListContainer.querySelectorAll('app-chat-list'));
-        const othersList = allChatLists.find(list => list.querySelector('header > div > span')?.textContent.trim() === 'Outros');
+        // 3. Lê todos os chats das listas originais (escondidas)
+        const allOriginalLists = Array.from(originalContainer.querySelectorAll('app-chat-list'));
+        const myChatsList = allOriginalLists.find(list => list.querySelector('header > div > span')?.textContent.trim() === 'Meus chats');
+        const othersList = allOriginalLists.find(list => list.querySelector('header > div > span')?.textContent.trim() === 'Outros');
 
-        if (!othersList) return;
+        const myChatsItems = myChatsList ? Array.from(myChatsList.querySelectorAll('app-chat-list-item')) : [];
+        const otherChatsItems = othersList ? Array.from(othersList.querySelectorAll('app-chat-list-item')) : [];
 
-        const otherChatsItems = Array.from(othersList.querySelectorAll('app-chat-list-item'));
+        // 4. Limpa nosso container para redesenhar
+        crxMask.innerHTML = '';
+
+        // 5. Renderiza "Meus Chats" (sempre visível, com rolagem interna)
+        if (myChatsItems.length > 0) {
+            const header = document.createElement('div');
+            header.className = 'crx-group-header';
+            header.style.backgroundColor = '#6c757d'; // Cinza neutro
+            header.style.cursor = 'default';
+            header.innerHTML = `<span>Meus Chats [${myChatsItems.length}]</span>`;
+            crxMask.appendChild(header);
+
+            const groupContainer = document.createElement('div');
+            groupContainer.className = 'crx-group-container';
+            myChatsItems.forEach(item => groupContainer.appendChild(item.cloneNode(true)));
+            crxMask.appendChild(groupContainer);
+        }
+
+        // 6. Agrupa, ordena e renderiza os outros chats
         const groups = new Map();
-
         otherChatsItems.forEach(item => {
             const category = getCategory(item);
             if (!groups.has(category)) groups.set(category, []);
             groups.get(category).push(item);
         });
-
-        othersList.remove();
 
         const sortedGroups = new Map([...groups.entries()].sort());
 
@@ -444,20 +466,21 @@
                 <span>${category} [${groupItems.length}]</span>
                 <span class="crx-chevron">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
-                </span>
-            `;
+                </span>`;
+
             const groupContainer = document.createElement('div');
             groupContainer.className = 'crx-group-container';
-            const initialMaxHeight = groupItems.length * (isCompactMode ? 40 : 80); // Considera modo compacto
+            const itemHeight = isCompactMode ? 40 : 72;
+            const totalHeight = groupItems.length * itemHeight;
+
             header.onclick = () => {
-                const willCollapse = !header.classList.contains('collapsed');
-                header.classList.toggle('collapsed');
-                groupContainer.style.maxHeight = willCollapse ? '0px' : `${initialMaxHeight}px`;
-                if (willCollapse) collapsedGroups.add(category); else collapsedGroups.delete(category);
+                const wasCollapsed = header.classList.toggle('collapsed');
+                groupContainer.style.maxHeight = wasCollapsed ? '0px' : `${totalHeight}px`;
             };
-            chatListContainer.appendChild(header);
-            chatListContainer.appendChild(groupContainer);
-            groupContainer.style.maxHeight = isCollapsed ? '0px' : `${initialMaxHeight}px`;
+
+            crxMask.appendChild(header);
+            crxMask.appendChild(groupContainer);
+            groupContainer.style.maxHeight = isCollapsed ? '0px' : `${totalHeight}px`;
 
             groupItems.sort((a, b) => {
                 const aP = a.classList.contains('crx-chat-highlight') ? 3 : (a.classList.contains('crx-chat-aguardando') ? 2 : 1);
@@ -465,10 +488,8 @@
                 return bP - aP;
             });
 
-            groupItems.forEach(item => groupContainer.appendChild(item));
+            groupItems.forEach(item => groupContainer.appendChild(item.cloneNode(true)));
         });
-
-        chatListContainer.setAttribute('data-crx-grouped', 'true');
     }
 
     function injetarIndicadorDeVersao() {
@@ -488,18 +509,13 @@
     let mainInterval;
 
     function aplicarCustomizacoes() {
+        // Primeiro, aplica classes aos itens originais para que os clones as herdem
         aplicarDestaquesECores();
 
-        // [REMOVIDO v8.8] A função aplicarBarraDeRolagem() foi removida pois o CSS agora cuida disso.
+        // Em seguida, redesenha nossa lista customizada
+        agruparEOrdenarChats();
 
-        const chatListContainer = document.querySelector('app-chat-list-container > section');
-        if (chatListContainer) {
-            if (!chatListContainer.getAttribute('data-crx-grouped') || chatListContainer.querySelector('app-chat-list')) {
-                chatListContainer.removeAttribute('data-crx-grouped');
-                agruparEOrdenarChats();
-            }
-        }
-
+        // Por fim, injeta elementos na interface de chat ativo
         if (document.querySelector('app-chat-agent-header')) {
             injetarBotaoRegistro();
             observarTags();
@@ -509,12 +525,10 @@
     function inicializar() {
         injetarEstilos();
 
-        // [NOVO v8.8] Aplica a classe de modo compacto na inicialização, se estiver ativa
         if (isCompactMode) {
             document.body.classList.add('crx-compact-view');
         }
 
-        // Observer para elementos que aparecem dinamicamente
         const observer = new MutationObserver(() => {
             const targetContainer = document.querySelector('app-chat-list-container > div.flex.items-center');
             if (targetContainer) {
@@ -524,7 +538,6 @@
         });
         observer.observe(document.body, { childList: true, subtree: true });
 
-        // Inicia a lógica do auto-refresh inteligente por inatividade
         window.addEventListener('mousemove', resetIdleTimer, { passive: true });
         window.addEventListener('keypress', resetIdleTimer, { passive: true });
         window.addEventListener('click', resetIdleTimer, { passive: true });
