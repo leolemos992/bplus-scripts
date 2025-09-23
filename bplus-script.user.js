@@ -32,7 +32,7 @@
     const COMPACT_VIEW_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="20" y2="6"></line><line x1="4" y1="12" x2="20" y2="12"></line><line x1="4" y1="18" x2="20" y2="18"></line></svg>`;
 
     // --- VARIÁVEIS DE ESTADO ---
-    const collapsedGroups = new Set();
+    let collapsedGroups = new Set();
     let idleTimer; // Variável para o timer de inatividade
     let isCompactMode = GM_getValue('compactMode', false);
 
@@ -119,56 +119,18 @@
             .crx-btn { width: 100%; padding: 10px; background-color: #2c6fbb; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; }
             #crx-status { margin-top: 15px; font-weight: bold; text-align: center; }
 
-            /* MODO COMPACTO (LÓGICA CSS RECONSTRUÍDA) */
-            .crx-chat-list-container.crx-compact-view app-chat-list-item {
-                height: 45px !important; /* Altura reduzida */
-            }
-            /* Esconde o ícone de perfil do solicitante */
-            .crx-chat-list-container.crx-compact-view app-chat-list-item > div:first-of-type {
-                display: none !important;
-            }
-            /* Esconde as informações do analista (última div na seção principal) */
-            .crx-chat-list-container.crx-compact-view app-chat-list-item section > section > div:last-child {
-                display: none !important;
-            }
-            /* Esconde o tipo de serviço */
-            .crx-chat-list-container.crx-compact-view app-chat-list-item section > div > span.shrink-0 {
-                display: none !important;
-            }
-
-            /* Reajusta o layout do conteúdo principal */
-            .crx-chat-list-container.crx-compact-view app-chat-list-item section > section {
-                display: flex;
-                align-items: center;
-                height: 100%;
-            }
-            /* Ajusta a largura do nome do solicitante e revenda para ocupar espaço */
-            .crx-chat-list-container.crx-compact-view app-chat-list-item section > section > div:first-of-type {
-                display: flex;
-                flex-direction: row;
-                align-items: center;
-                gap: 5px; /* Espaço entre solicitante e revenda */
-                white-space: nowrap;
-                overflow: hidden;
-                text-overflow: ellipsis;
-                width: calc(100% - 20px); /* Ajuste para não colidir com o ícone de alerta */
-            }
-            /* Adiciona o hífen entre solicitante e revenda via CSS */
-            .crx-chat-list-container.crx-compact-view app-chat-list-item span.font-medium::after {
-                content: ' - ';
-                font-weight: normal;
-                color: #666; /* Cor do hífen */
-            }
-            .dark .crx-chat-list-container.crx-compact-view app-chat-list-item span.font-medium::after {
-                color: #aaa;
-            }
-            /* Reposiciona o ícone de alerta/notificação */
-            .crx-chat-list-container.crx-compact-view app-chat-list-item span.justify-between {
-                position: absolute;
-                right: 12px;
-                top: 50%; /* Centraliza verticalmente */
-                transform: translateY(-50%); /* Ajuste fino para centralização */
-            }
+            /* MODO COMPACTO (LÓGICA CSS CORRIGIDA) */
+            .crx-compact-view app-chat-list-item { height: 40px !important; align-items: center; }
+            .crx-compact-view app-chat-list-item > div:first-of-type { display: none !important; } /* Esconde ícone do solicitante */
+            .crx-compact-view app-chat-list-item section > section > div:last-child { display: none !important; } /* Esconde info do analista */
+            .crx-compact-view app-chat-list-item section > div > span.shrink-0 { display: none !important; } /* Esconde tipo de serviço */
+            /* Realinha o conteúdo restante */
+            .crx-compact-view app-chat-list-item section { height: 100%; }
+            .crx-compact-view app-chat-list-item section > section { display: flex; align-items: center; height: 100%; }
+            .crx-compact-view app-chat-list-item section > section > div:first-of-type { display: flex; flex-direction: row; align-items: center; gap: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: calc(100% - 30px); }
+            .crx-compact-view app-chat-list-item span.font-medium::after { content: ' - '; font-weight: normal; color: #666; }
+            .dark .crx-compact-view app-chat-list-item span.font-medium::after { color: #aaa; }
+            .crx-compact-view app-chat-list-item span.justify-between { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); }
 
             /* Estilos de Categoria */
             ${styles}
@@ -333,18 +295,8 @@
             compactBtn.onclick = () => {
                 isCompactMode = !isCompactMode;
                 GM_setValue('compactMode', isCompactMode);
-                aplicarVisualizacaoCompacta(); // Aplica a classe imediatamente
-                compactBtn.classList.toggle('active', isCompactMode); // Atualiza o estado visual do botão
-                // A altura do grupo precisa ser recalculada se houver grupos colapsados
-                document.querySelectorAll('.crx-group-header').forEach(header => {
-                    const groupContainer = header.nextElementSibling;
-                    if (groupContainer && groupContainer.classList.contains('crx-group-container')) {
-                        if (!header.classList.contains('collapsed')) { // Só recalcula se não estiver colapsado
-                             const itemCount = groupContainer.children.length;
-                             groupContainer.style.maxHeight = `${itemCount * (isCompactMode ? 45 : 80)}px`;
-                        }
-                    }
-                });
+                compactBtn.classList.toggle('active', isCompactMode);
+                document.querySelector('app-chat-list-container > section')?.classList.toggle('crx-compact-view', isCompactMode);
             };
             container.appendChild(compactBtn);
         }
@@ -493,7 +445,7 @@
             const groupContainer = document.createElement('div');
             groupContainer.className = 'crx-group-container';
             // Ajusta a altura inicial para o modo compacto
-            const initialMaxHeight = groupItems.length * (isCompactMode ? 45 : 80);
+            const initialMaxHeight = groupItems.length * (isCompactMode ? 40 : 80); // <<< VALOR ATUALIZADO AQUI
             header.onclick = () => {
                 const willCollapse = !header.classList.contains('collapsed');
                 header.classList.toggle('collapsed');
