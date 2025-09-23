@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         B.Plus! - Contador de Atendimentos & Melhorias Beemore
 // @namespace    http://tampermonkey.net/
-// @version      8.6
-// @description  Adiciona barra de rolagem na seção 'Meus chats' para otimizar espaço e remove a funcionalidade de modo compacto.
+// @version      8.7
+// @description  Implementa barra de rolagem funcional em 'Meus chats' via JavaScript para maior robustez e remove o botão de atualizar.
 // @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
 // @grant        GM_xmlhttpRequest
@@ -18,7 +18,7 @@
     'use strict';
 
     // --- CONFIGURAÇÕES GERAIS ---
-    const SCRIPT_VERSION = GM_info.script.version || '8.6';
+    const SCRIPT_VERSION = GM_info.script.version || '8.7';
     const IDLE_REFRESH_SECONDS = 90; // Tempo em segundos para o auto-refresh
     const MAX_MY_CHATS_HEIGHT_ITEMS = 4; // Máximo de chats visíveis em 'Meus Chats' antes da barra de rolagem
     const API_URL = 'http://10.1.11.15/contador/api.php';
@@ -66,18 +66,18 @@
         GM_addStyle(`
             #bplus-custom-styles { display: none; } /* Elemento marcador para evitar reinjeção */
 
-            /* [NOVO v8.6] BARRA DE ROLAGEM PARA 'MEUS CHATS' */
-            app-chat-list:first-child > section {
+            /* [NOVO v8.7] ESTILO PARA BARRA DE ROLAGEM (aplicado via JS) */
+            .crx-scrollable-my-chats {
                 max-height: calc(${MAX_MY_CHATS_HEIGHT_ITEMS} * 72px); /* 72px é a altura aproximada de cada item */
                 overflow-y: auto !important;
                 overflow-x: hidden !important;
+                padding-right: 5px; /* Espaço para a barra de rolagem */
             }
             /* Estilização da barra de rolagem */
-            app-chat-list:first-child > section::-webkit-scrollbar { width: 6px; }
-            app-chat-list:first-child > section::-webkit-scrollbar-track { background: transparent; }
-            app-chat-list:first-child > section::-webkit-scrollbar-thumb { background-color: #ccc; border-radius: 10px; }
-            .dark app-chat-list:first-child > section::-webkit-scrollbar-thumb { background-color: #4f4f5a; }
-
+            .crx-scrollable-my-chats::-webkit-scrollbar { width: 6px; }
+            .crx-scrollable-my-chats::-webkit-scrollbar-track { background: transparent; }
+            .crx-scrollable-my-chats::-webkit-scrollbar-thumb { background-color: #ccc; border-radius: 10px; }
+            .dark .crx-scrollable-my-chats::-webkit-scrollbar-thumb { background-color: #4f4f5a; }
 
             /* Animações e Destaques */
             @keyframes crx-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
@@ -272,29 +272,16 @@
     // FUNCIONALIDADE: MELHORIAS DE INTERFACE E AUTO-REFRESH
     // =================================================================================
     function adicionarControles(container) {
-        // [REMOVIDO v8.6] Remove o botão de modo compacto se ele ainda existir de uma versão anterior
+        // **[REMOVIDO v8.7]** O botão de atualização manual foi removido.
+        const refreshBtn = document.getElementById('crx-refresh-btn');
+        if (refreshBtn) {
+            refreshBtn.remove();
+        }
+
+        // Remove o botão de modo compacto se ele ainda existir de uma versão anterior
         const compactBtn = document.getElementById('crx-compact-toggle');
         if (compactBtn) {
             compactBtn.remove();
-        }
-
-        // [REINTRODUZIDO v8.6] Adiciona botão de atualização manual
-        if (!document.getElementById('crx-refresh-btn')) {
-            let refreshBtn = document.createElement('button');
-            refreshBtn.id = 'crx-refresh-btn';
-            refreshBtn.className = 'crx-control-btn';
-            refreshBtn.title = 'Atualizar listas de chat';
-            refreshBtn.innerHTML = REFRESH_SVG;
-            refreshBtn.onclick = () => atualizarListasDeChat(false);
-
-            // Insere o botão ao lado do campo de busca para melhor usabilidade
-            const searchInput = container.querySelector('app-input-search');
-            if (searchInput) {
-                 searchInput.insertAdjacentElement('afterend', refreshBtn);
-            } else {
-                 // Fallback caso o campo de busca não seja encontrado
-                 container.appendChild(refreshBtn);
-            }
         }
     }
 
@@ -429,7 +416,7 @@
             `;
             const groupContainer = document.createElement('div');
             groupContainer.className = 'crx-group-container';
-            const initialMaxHeight = groupItems.length * 80; // Altura base por item (não mais depende do modo compacto)
+            const initialMaxHeight = groupItems.length * 80;
             header.onclick = () => {
                 const willCollapse = !header.classList.contains('collapsed');
                 header.classList.toggle('collapsed');
@@ -451,6 +438,24 @@
 
         chatListContainer.setAttribute('data-crx-grouped', 'true');
     }
+    
+    // **[NOVO v8.7]** Função para aplicar a classe de rolagem dinamicamente
+    function aplicarBarraDeRolagem() {
+        const allLists = document.querySelectorAll('app-chat-list');
+        allLists.forEach(list => {
+            const header = list.querySelector('header span');
+            const section = list.querySelector('section');
+            if (header && section) {
+                if (header.innerText.trim().toLowerCase() === 'meus chats') {
+                    // Adiciona a classe para ativar a rolagem
+                    section.classList.add('crx-scrollable-my-chats');
+                } else {
+                    // Garante que a classe não esteja em outras listas
+                    section.classList.remove('crx-scrollable-my-chats');
+                }
+            }
+        });
+    }
 
     function injetarIndicadorDeVersao() {
         if (document.getElementById('crx-version-indicator-sidebar')) return;
@@ -470,6 +475,9 @@
 
     function aplicarCustomizacoes() {
         aplicarDestaquesECores();
+
+        // **[NOVO v8.7]** Aplica a barra de rolagem a cada ciclo
+        aplicarBarraDeRolagem();
 
         const chatListContainer = document.querySelector('app-chat-list-container > section');
         if (chatListContainer) {
