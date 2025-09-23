@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         B.Plus! - Otimizado
 // @namespace    http://tampermonkey.net/
-// @version      9.0
-// @description  Script otimizado com MutationObserver para atualizações eficientes e em tempo real da lista de chats, eliminando flickering e uso desnecessário de CPU.
-// @author       Jose Leonardo Lemos
+// @version      9.1
+// @description  Script otimizado com MutationObserver para atualizações eficientes, com correção para não limpar a lista de chats antes do carregamento.
+// @author       Jose Leonardo Lemos (com otimizações)
 // @match        https://*.beemore.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_addStyle
@@ -18,7 +18,7 @@
     'use strict';
 
     // --- CONFIGURAÇÕES GERAIS ---
-    const SCRIPT_VERSION = GM_info.script.version || '9.0';
+    const SCRIPT_VERSION = GM_info.script.version || '9.1';
     const IDLE_REFRESH_SECONDS = 90; // Tempo em segundos para o auto-refresh
     const API_URL = 'http://10.1.11.15/contador/api.php';
     const CATEGORY_COLORS = {
@@ -111,7 +111,7 @@
     }
 
     // =================================================================================
-    // CAPTURA DE DADOS E FUNCIONALIDADES (SEM ALTERAÇÃO)
+    // CAPTURA DE DADOS E FUNCIONALIDADES
     // =================================================================================
     function capturarDadosPagina() {
         let analista = '', numero = '', solicitante = '', revenda = '', servicoSelecionado = '';
@@ -297,29 +297,51 @@
         });
     }
 
+    function injetarIndicadorDeVersao() {
+        if (document.getElementById('crx-version-indicator-sidebar')) return;
+        const helpButton = document.querySelector('div[data-sidebar-option="help"]');
+        if (helpButton && helpButton.parentElement) {
+            const indicator = document.createElement('div');
+            indicator.id = 'crx-version-indicator-sidebar';
+            indicator.innerHTML = `B+ <span class="crx-tooltip">B.Plus! v${SCRIPT_VERSION}<br>Status: Otimizado</span>`;
+            helpButton.parentElement.insertBefore(indicator, helpButton);
+        }
+    }
+
+    // =================================================================================
+    // FUNÇÃO DE AGRUPAMENTO (COM A CORREÇÃO)
+    // =================================================================================
     function agruparEOrdenarChats() {
         const chatListContainer = document.querySelector('app-chat-list-container > section');
         if (!chatListContainer) return;
+
         const getCategory = (item) => item.querySelector('section > div:first-of-type > span:last-of-type')?.textContent.trim() || 'Sem Categoria';
 
-        // Mantém o estado dos grupos recolhidos
+        const allChatLists = Array.from(chatListContainer.querySelectorAll('app-chat-list'));
+        const allItems = allChatLists.flatMap(list => Array.from(list.querySelectorAll('app-chat-list-item')));
+
+        // --> CORREÇÃO PRINCIPAL: Adicionada uma guarda aqui <--
+        // Se não houver nenhum item de chat para processar, a função para imediatamente.
+        // Isso impede que ela limpe a área antes do Beemore carregar os chats.
+        if (allItems.length === 0) {
+            return;
+        }
+
         chatListContainer.querySelectorAll('.crx-group-header.collapsed').forEach(header => {
             const categoryName = header.querySelector('span:first-child').textContent.split(' [')[0];
             collapsedGroups.add(categoryName);
         });
 
-        const allChatLists = Array.from(chatListContainer.querySelectorAll('app-chat-list'));
-        const allItems = allChatLists.flatMap(list => Array.from(list.querySelectorAll('app-chat-list-item')));
         const groups = new Map();
-
         allItems.forEach(item => {
             const category = getCategory(item);
             if (!groups.has(category)) groups.set(category, []);
             groups.get(category).push(item);
         });
 
-        // Limpa a lista original para reconstruir com os grupos
-        allChatLists.forEach(list => list.remove());
+        // --> MELHORIA: Esconder as listas originais em vez de removê-las <--
+        // É mais seguro e evita que a aplicação quebre se precisar delas.
+        allChatLists.forEach(list => list.style.display = 'none');
 
         const sortedGroups = new Map([...groups.entries()].sort());
         sortedGroups.forEach((groupItems, category) => {
@@ -354,19 +376,8 @@
         });
     }
 
-    function injetarIndicadorDeVersao() {
-        if (document.getElementById('crx-version-indicator-sidebar')) return;
-        const helpButton = document.querySelector('div[data-sidebar-option="help"]');
-        if (helpButton && helpButton.parentElement) {
-            const indicator = document.createElement('div');
-            indicator.id = 'crx-version-indicator-sidebar';
-            indicator.innerHTML = `B+ <span class="crx-tooltip">B.Plus! v${SCRIPT_VERSION}<br>Status: Otimizado</span>`;
-            helpButton.parentElement.insertBefore(indicator, helpButton);
-        }
-    }
-
     // =================================================================================
-    // LOOP PRINCIPAL E INICIALIZAÇÃO (OTIMIZADO COM MUTATION OBSERVER)
+    // LOOP PRINCIPAL E INICIALIZAÇÃO (OTIMIZADO)
     // =================================================================================
     let debounceTimer;
 
@@ -375,8 +386,10 @@
 
         const chatListContainer = document.querySelector('app-chat-list-container > section');
         if (chatListContainer) {
-            // Limpa os cabeçalhos antigos antes de reagrupar para evitar duplicação
+            // Limpa apenas os grupos que NÓS criamos, para evitar duplicatas
             chatListContainer.querySelectorAll('.crx-group-header, .crx-group-container').forEach(el => el.remove());
+            // Mostra as listas originais novamente para que a função de agrupar possa encontrá-las
+            chatListContainer.querySelectorAll('app-chat-list').forEach(list => list.style.display = '');
             agruparEOrdenarChats();
         }
 
