@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         B.Plus! - Contador de Atendimentos & Melhorias Beemore
 // @namespace    http://tampermonkey.net/
-// @version      8.5
-// @description  Remove o botão de atualizar manual, exibe a revenda no modo compacto e mantém todas as otimizações.
+// @version      8.6
+// @description  Adiciona barra de rolagem na seção 'Meus chats' para otimizar espaço e remove a funcionalidade de modo compacto.
 // @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
 // @grant        GM_xmlhttpRequest
@@ -18,8 +18,9 @@
     'use strict';
 
     // --- CONFIGURAÇÕES GERAIS ---
-    const SCRIPT_VERSION = GM_info.script.version || '8.5';
+    const SCRIPT_VERSION = GM_info.script.version || '8.6';
     const IDLE_REFRESH_SECONDS = 90; // Tempo em segundos para o auto-refresh
+    const MAX_MY_CHATS_HEIGHT_ITEMS = 4; // Máximo de chats visíveis em 'Meus Chats' antes da barra de rolagem
     const API_URL = 'http://10.1.11.15/contador/api.php';
     const CATEGORY_COLORS = {
         'Suporte - PDV': '#E57373', 'Suporte - Retaguarda': '#64B5F6', 'Suporte - Fiscal': '#81C784',
@@ -28,12 +29,11 @@
         'default': '#BDBDBD'
     };
     const SPINNER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="crx-spinner"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg>`;
-    const COMPACT_VIEW_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="20" y2="6"></line><line x1="4" y1="12" x2="20" y2="12"></line><line x1="4" y1="18" x2="20" y2="18"></line></svg>`;
+    const REFRESH_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>`;
 
     // --- VARIÁVEIS DE ESTADO ---
     const collapsedGroups = new Set();
     let idleTimer; // Variável para o timer de inatividade
-    let isCompactMode = GM_getValue('compactMode', false);
     let isAutoRefreshing = false; // Flag para controlar o processo de auto-refresh
 
     // Função auxiliar para converter HEX para RGBA
@@ -65,6 +65,20 @@
         }
         GM_addStyle(`
             #bplus-custom-styles { display: none; } /* Elemento marcador para evitar reinjeção */
+
+            /* [NOVO v8.6] BARRA DE ROLAGEM PARA 'MEUS CHATS' */
+            app-chat-list:first-child > section {
+                max-height: calc(${MAX_MY_CHATS_HEIGHT_ITEMS} * 72px); /* 72px é a altura aproximada de cada item */
+                overflow-y: auto !important;
+                overflow-x: hidden !important;
+            }
+            /* Estilização da barra de rolagem */
+            app-chat-list:first-child > section::-webkit-scrollbar { width: 6px; }
+            app-chat-list:first-child > section::-webkit-scrollbar-track { background: transparent; }
+            app-chat-list:first-child > section::-webkit-scrollbar-thumb { background-color: #ccc; border-radius: 10px; }
+            .dark app-chat-list:first-child > section::-webkit-scrollbar-thumb { background-color: #4f4f5a; }
+
+
             /* Animações e Destaques */
             @keyframes crx-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
             .crx-spinner { animation: crx-spin 1s linear infinite; }
@@ -99,11 +113,8 @@
                 border-radius: 0.25rem; cursor: pointer; font-weight: 500; margin-right: 8px; display: flex; align-items: center;
             }
             #crx-header-btn:hover { background-color: #F97316; border-color: #EA580C; }
-            .crx-control-btn { background-color: #ffffff; border: 1px solid #e5e7eb; color: #525252; transition: all 0.2s; display: flex; align-items: center; justify-content: center; height: 2rem; width: 2rem; border-radius: 0.25rem; cursor: pointer; }
+            .crx-control-btn { background-color: #ffffff; border: 1px solid #e5e7eb; color: #525252; transition: all 0.2s; display: flex; align-items: center; justify-content: center; height: 2rem; width: 2rem; border-radius: 0.25rem; cursor: pointer; margin-left: 8px; }
             .dark .crx-control-btn { background-color: #37374a; border-color: #4c445c; color: #e1e1e1; }
-            #crx-compact-toggle { margin-left: 8px; }
-            #crx-compact-toggle.active { background-color: #e0e7ff; border-color: #a5b4fc; }
-            .dark #crx-compact-toggle.active { background-color: #4a4a6a; border-color: #6d6d8d; }
 
             /* Modal (Claro e Escuro) */
             .crx-modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.6); z-index: 9998; display: flex; justify-content: center; align-items: center; }
@@ -117,28 +128,6 @@
             .dark .crx-form-group input, .dark .crx-form-group select { background-color: #3e374e !important; color: #e1e1e1 !important; border-color: #4c445c !important; }
             .crx-btn { width: 100%; padding: 10px; background-color: #2c6fbb; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; }
             #crx-status { margin-top: 15px; font-weight: bold; text-align: center; }
-
-            /* MODO COMPACTO (LÓGICA CSS v8.5) */
-            .crx-chat-list-container.crx-compact-view app-chat-list-item {
-                height: 40px !important;
-                align-items: center !important;
-            }
-            .crx-chat-list-container.crx-compact-view app-chat-list-item > div:first-of-type { display: none !important; } /* Esconde avatar */
-            .crx-chat-list-container.crx-compact-view app-chat-list-item section > section > div:last-child { display: none !important; } /* Esconde linha de última mensagem */
-            .crx-chat-list-container.crx-compact-view app-chat-list-item section > div > span.shrink-0 { display: none !important; } /* Esconde categoria */
-            .crx-chat-list-container.crx-compact-view app-chat-list-item app-tag[icon="tablerClock"] { display: none !important; } /* Esconde o timer de 'Aguardando' */
-
-            .crx-chat-list-container.crx-compact-view app-chat-list-item section { height: 100% !important; }
-            .crx-chat-list-container.crx-compact-view app-chat-list-item section > section { display: flex !important; align-items: center !important; height: 100% !important; }
-            .crx-chat-list-container.crx-compact-view app-chat-list-item section > section > div:first-of-type {
-                display: flex !important; flex-direction: row !important; align-items: center !important;
-                gap: 5px !important; white-space: nowrap !important; overflow: hidden !important;
-                text-overflow: ellipsis !important; width: calc(100% - 30px) !important;
-            }
-            /* Adiciona separador entre o nome do solicitante e a revenda */
-            .crx-chat-list-container.crx-compact-view app-chat-list-item span.font-medium::after { content: ' - '; font-weight: normal; color: #666; }
-            .dark .crx-chat-list-container.crx-compact-view app-chat-list-item span.font-medium::after { color: #aaa; }
-            .crx-chat-list-container.crx-compact-view app-chat-list-item span.justify-between { position: absolute !important; right: 12px !important; top: 50% !important; transform: translateY(-50%) !important; }
 
             /* Estilos de Categoria */
             ${styles}
@@ -283,46 +272,35 @@
     // FUNCIONALIDADE: MELHORIAS DE INTERFACE E AUTO-REFRESH
     // =================================================================================
     function adicionarControles(container) {
-        // O botão de atualização manual foi removido na v8.5.
+        // [REMOVIDO v8.6] Remove o botão de modo compacto se ele ainda existir de uma versão anterior
+        const compactBtn = document.getElementById('crx-compact-toggle');
+        if (compactBtn) {
+            compactBtn.remove();
+        }
 
-        if (!document.getElementById('crx-compact-toggle')) {
-            let compactBtn = document.createElement('button');
-            compactBtn.id = 'crx-compact-toggle';
-            compactBtn.className = 'crx-control-btn';
-            compactBtn.title = 'Alternar Visualização Compacta';
-            compactBtn.innerHTML = COMPACT_VIEW_SVG;
-            if (isCompactMode) compactBtn.classList.add('active');
+        // [REINTRODUZIDO v8.6] Adiciona botão de atualização manual
+        if (!document.getElementById('crx-refresh-btn')) {
+            let refreshBtn = document.createElement('button');
+            refreshBtn.id = 'crx-refresh-btn';
+            refreshBtn.className = 'crx-control-btn';
+            refreshBtn.title = 'Atualizar listas de chat';
+            refreshBtn.innerHTML = REFRESH_SVG;
+            refreshBtn.onclick = () => atualizarListasDeChat(false);
 
-            compactBtn.onclick = () => {
-                isCompactMode = !isCompactMode;
-                GM_setValue('compactMode', isCompactMode);
-                compactBtn.classList.toggle('active', isCompactMode);
-                document.querySelector('app-chat-list-container > section')?.classList.toggle('crx-compact-view', isCompactMode);
-            };
-            
-            // Insere o botão compacto ao lado do campo de busca para melhor usabilidade
+            // Insere o botão ao lado do campo de busca para melhor usabilidade
             const searchInput = container.querySelector('app-input-search');
             if (searchInput) {
-                 searchInput.insertAdjacentElement('afterend', compactBtn);
+                 searchInput.insertAdjacentElement('afterend', refreshBtn);
             } else {
                  // Fallback caso o campo de busca não seja encontrado
-                 container.appendChild(compactBtn);
+                 container.appendChild(refreshBtn);
             }
-        }
-    }
-
-    function aplicarVisualizacaoCompacta() {
-        const container = document.querySelector('app-chat-list-container > section');
-        if (container) {
-            container.classList.add('crx-chat-list-container'); // Garante que a classe principal exista
-            container.classList.toggle('crx-compact-view', isCompactMode);
         }
     }
 
     /**
      * MÉTODO DE ATUALIZAÇÃO ESTÁVEL. Navega para o dashboard e volta para a página de chat
-     * para forçar um recarregamento completo dos dados, evitando o sumiço de chats.
-     * Na v8.5, usa uma flag interna e atualiza o ícone da barra lateral para feedback.
+     * para forçar um recarregamento completo dos dados.
      */
     function atualizarListasDeChat(isAutoRefresh = false) {
         const dashboardButton = document.querySelector('div[data-sidebar-option="dashboard"]');
@@ -334,7 +312,7 @@
         }
 
         if (isAutoRefreshing) {
-             console.log('B.Plus!: Atualização automática já em andamento.');
+             console.log('B.Plus!: Atualização já em andamento.');
              return;
         }
 
@@ -343,7 +321,6 @@
         if (versionIndicator) {
              versionIndicator.innerHTML = `${SPINNER_SVG} <span class="crx-tooltip">B.Plus! v${SCRIPT_VERSION}<br>Atualizando...</span>`;
         }
-
 
         dashboardButton.click();
         setTimeout(() => {
@@ -358,7 +335,7 @@
     }
 
     /**
-     * LÓGICA DE ATUALIZAÇÃO INTELIGENTE APRIMORADA.
+     * LÓGICA DE ATUALIZAÇÃO INTELIGENTE.
      */
     function performSmartRefresh() {
         // CONDIÇÃO DE GUARDA: Só roda se estiver na página de chat
@@ -452,7 +429,7 @@
             `;
             const groupContainer = document.createElement('div');
             groupContainer.className = 'crx-group-container';
-            const initialMaxHeight = groupItems.length * (isCompactMode ? 40 : 80); // Ajusta altura para modo compacto
+            const initialMaxHeight = groupItems.length * 80; // Altura base por item (não mais depende do modo compacto)
             header.onclick = () => {
                 const willCollapse = !header.classList.contains('collapsed');
                 header.classList.toggle('collapsed');
@@ -493,7 +470,6 @@
 
     function aplicarCustomizacoes() {
         aplicarDestaquesECores();
-        aplicarVisualizacaoCompacta();
 
         const chatListContainer = document.querySelector('app-chat-list-container > section');
         if (chatListContainer) {
