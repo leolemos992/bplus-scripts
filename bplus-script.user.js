@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         B.Plus! - Contador de Atendimentos & Melhorias Beemore
 // @namespace    http://tampermonkey.net/
-// @version      10.1
-// @description  Layout duplo (Abas/Lista), tags e fundos coloridos, contadores e botão de serviço incorreto.
+// @version      10.2
+// @description  Lógica de agrupamento aprimorada para garantir que todos os chats (incluindo 'Aguardando Atendimento') sejam exibidos corretamente.
 // @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
 // @grant        GM_xmlhttpRequest
@@ -18,7 +18,7 @@
     'use strict';
 
     // --- CONFIGURAÇÕES GERAIS ---
-    const SCRIPT_VERSION = GM_info.script.version || '10.1';
+    const SCRIPT_VERSION = GM_info.script.version || '10.2';
     const IDLE_REFRESH_SECONDS = 90;
     const API_URL = 'http://10.1.11.15/contador/api.php';
     const SPINNER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="crx-spinner"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg>`;
@@ -549,6 +549,9 @@
         container.appendChild(controlsContainer);
     }
 
+    // =================================================================================
+    // FUNÇÃO PRINCIPAL DE RENDERIZAÇÃO (ATUALIZADA)
+    // =================================================================================
     function renderCustomChatList() {
         const originalContainer = document.querySelector('app-chat-list-container > section');
         if (!originalContainer) return;
@@ -560,27 +563,32 @@
             originalContainer.appendChild(crxMainContainer);
         }
 
-        const mapItemToData = (item, index) => ({
-            id: `crx-item-${index}`,
-            solicitante: item.querySelector('span.font-medium')?.innerText.trim() || 'Usuário anônimo',
-            revenda: item.querySelector('span.inline-flex > span.truncate')?.innerText.trim() || 'Sem revenda',
-            categoria: item.querySelector('span.shrink-0')?.textContent.trim() || 'Sem Categoria',
-            hasNotification: !!item.querySelector('app-icon[icon="tablerAlertCircle"]'),
-            isWaiting: item.classList.contains('crx-is-waiting'),
-            isAlert: item.classList.contains('crx-is-alert'),
-            isActive: item.classList.contains('active'),
-            avatarImgSrc: item.querySelector('app-user-picture img')?.src,
-            originalElement: item
+        const allChatItems = Array.from(document.querySelectorAll('app-chat-list-item'));
+
+        // Mapeia TODOS os itens para extrair seus dados de forma robusta
+        const allChatsData = allChatItems.map((item, index) => {
+            // Verifica se o item pertence à lista "Meus chats" subindo na árvore DOM
+            const isMyChat = !!item.closest('app-chat-list')?.querySelector('header span')?.textContent.includes('Meus chats');
+            const categoria = item.querySelector('span.shrink-0')?.textContent.trim() || 'Sem Categoria';
+
+            return {
+                id: `crx-item-${index}`, // ID único para rastreamento
+                solicitante: item.querySelector('span.font-medium')?.innerText.trim() || 'Usuário anônimo',
+                revenda: item.querySelector('span.inline-flex > span.truncate')?.innerText.trim() || 'Sem revenda',
+                categoria: categoria,
+                hasNotification: !!item.querySelector('app-icon[icon="tablerAlertCircle"]'),
+                isWaiting: item.classList.contains('crx-is-waiting'),
+                isAlert: item.classList.contains('crx-is-alert'),
+                isActive: item.classList.contains('active'),
+                avatarImgSrc: item.querySelector('app-user-picture img')?.src,
+                isMyChat: isMyChat,
+                originalElement: item
+            };
         });
 
-        const allChatItems = Array.from(document.querySelectorAll('app-chat-list-item'));
-        const myChatsHeader = Array.from(document.querySelectorAll('app-chat-list > header > div > span'))
-                                   .find(span => span.textContent.trim() === 'Meus chats');
-        const myChatsOriginalList = myChatsHeader ? myChatsHeader.closest('app-chat-list') : null;
-
-        const allChatsData = allChatItems.map(mapItemToData);
-        const myChatsData = myChatsOriginalList ? Array.from(myChatsOriginalList.querySelectorAll('app-chat-list-item')).map(mapItemToData) : [];
-        const otherChatsData = allChatsData.filter(chat => !myChatsData.some(myChat => myChat.originalElement === chat.originalElement));
+        // Filtra os dados mapeados para criar as duas listas
+        const myChatsData = allChatsData.filter(chat => chat.isMyChat);
+        const otherChatsData = allChatsData.filter(chat => !chat.isMyChat);
 
         // --- Inicia a construção do HTML ---
         crxMainContainer.innerHTML = ''; // Limpa antes de redesenhar
@@ -603,6 +611,7 @@
             }
         });
     }
+
 
     // =================================================================================
     // INICIALIZAÇÃO E LOOP PRINCIPAL
