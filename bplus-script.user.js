@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         B.Plus! - Contador de Atendimentos & Melhorias Beemore
 // @namespace    http://tampermonkey.net/
-// @version      10.0 // Versão atualizada
-// @description  Adiciona tags coloridas na aba 'Todos', fundo colorido nas abas ativas e remove o seletor de layout.
+// @version      10.1
+// @description  Layout duplo (Abas/Lista), tags e fundos coloridos, contadores e botão de serviço incorreto.
 // @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
 // @grant        GM_xmlhttpRequest
@@ -18,14 +18,14 @@
     'use strict';
 
     // --- CONFIGURAÇÕES GERAIS ---
-    const SCRIPT_VERSION = GM_info.script.version || '10.0'; // Versão atualizada
+    const SCRIPT_VERSION = GM_info.script.version || '10.1';
     const IDLE_REFRESH_SECONDS = 90;
     const API_URL = 'http://10.1.11.15/contador/api.php';
     const SPINNER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="crx-spinner"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg>`;
     const USER_ICON_SVG = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"></path></svg>`;
-    // LAYOUT_ICON_SVG removido pois o seletor de layout será removido
+    const LAYOUT_ICON_SVG = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>`;
 
-    // --- CONFIGURAÇÕES DE UI v10.0 ---
+    // --- CONFIGURAÇÕES DE UI v10.1 ---
     const CATEGORY_COLORS = {
         'Suporte - Web': '#3498db',
         'Suporte - PDV': '#2ecc71',
@@ -39,13 +39,12 @@
     let idleTimer;
     let isAutoRefreshing = false;
     let activeFilter = 'Todos';
-    // activeLayout e GM_getValue('activeLayout') removidos pois o seletor de layout será removido
+    let activeLayout = GM_getValue('activeLayout', 'tabs'); // 'tabs' ou 'list'
 
     // =================================================================================
     // FUNÇÕES AUXILIARES
     // =================================================================================
     function makeSafeForCSS(name) {
-        // Mais robusto para garantir nomes de classe CSS válidos
         return name.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase();
     }
 
@@ -72,39 +71,37 @@
         let dynamicStyles = '';
         for (const category in CATEGORY_COLORS) {
             const color = CATEGORY_COLORS[category];
-            const safeCategory = makeSafeForCSS(category); // Usando a função makeSafeForCSS global
+            const safeCategory = makeSafeForCSS(category);
             dynamicStyles += `
                 /* Cor da aba ativa (fundo sólido, texto branco) */
                 .crx-filter-tab[data-filter="${category}"].active {
                     background-color: ${color} !important;
                     color: white !important;
-                    border-bottom-color: transparent !important; /* Remove a borda inferior */
-                    border-radius: 6px 6px 0 0; /* Bordas arredondadas no topo */
-                    margin-bottom: -1px; /* Para 'grudar' na lista, se necessário */
+                    border-bottom-color: transparent !important;
+                    border-radius: 6px 6px 0 0;
+                    margin-bottom: -1px;
                 }
-                /* Cor do contador na aba ativa */
                 .crx-filter-tab[data-filter="${category}"].active .count {
                     background-color: rgba(255,255,255,0.2) !important;
                     color: white !important;
                 }
 
-                /* Cor de fundo e borda dos itens da lista (ajustado para filtro ativo) */
-                .crx-chat-list-container.crx-filter-active .crx-item-bg-${safeCategory} {
+                /* Cor de fundo e borda dos itens da lista */
+                .crx-item-bg-${safeCategory} {
                     border-left-color: ${color} !important;
-                    background-color: ${hexToRgba(color, 0.1)} !important;
+                    background-color: ${hexToRgba(color, 0.08)} !important;
                 }
-                .dark .crx-chat-list-container.crx-filter-active .crx-item-bg-${safeCategory} {
-                    background-color: ${hexToRgba(color, 0.2)} !important;
+                .dark .crx-item-bg-${safeCategory} {
+                    background-color: ${hexToRgba(color, 0.15)} !important;
                 }
-                /* Efeito hover sutil sobre a cor de fundo existente */
-                .crx-chat-list-container.crx-filter-active .crx-item-bg-${safeCategory}:not(.active):hover {
-                    background-color: ${hexToRgba(color, 0.2)} !important;
+                .crx-item-bg-${safeCategory}:not(.active):hover {
+                    background-color: ${hexToRgba(color, 0.18)} !important;
                 }
-                .dark .crx-chat-list-container.crx-filter-active .crx-item-bg-${safeCategory}:not(.active):hover {
-                    background-color: ${hexToRgba(color, 0.3)} !important;
+                .dark .crx-item-bg-${safeCategory}:not(.active):hover {
+                    background-color: ${hexToRgba(color, 0.25)} !important;
                 }
 
-                /* Tag colorida para a visão 'Todos' */
+                /* Tag colorida para a visão 'Todos' no layout de Abas */
                 .crx-category-tag-${safeCategory} {
                     background-color: ${color};
                     color: white;
@@ -112,8 +109,8 @@
                     border-radius: 4px;
                     font-size: 11px;
                     font-weight: 500;
-                    margin-right: 8px; /* Adiciona espaçamento à direita */
-                    flex-shrink: 0; /* Garante que a tag não diminua */
+                    margin-right: 8px;
+                    flex-shrink: 0;
                 }
             `;
         }
@@ -121,19 +118,33 @@
         GM_addStyle(`
             #bplus-custom-styles { display: none; }
 
-            /* --- LAYOUT CONTAINER --- */
+            /* --- CONTROLES DE LAYOUT --- */
             app-chat-list-container > section > app-chat-list { display: none !important; }
             #crx-main-container { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
 
-            /* Controles (Layout Toggle) - REMOVIDO */
-            /* O container de controles não é mais necessário sem o botão de toggle */
-            .crx-controls-container { display: none; }
+            /* Esconde o layout não ativo */
+            .crx-layout-tabs #crx-list-layout-container { display: none; }
+            .crx-layout-list #crx-tabs-layout-container { display: none; }
 
-            /* Barra de Abas (Rolagem Horizontal) */
+            .crx-controls-container {
+                display: flex; justify-content: flex-end; padding: 4px 8px;
+                background-color: #f8f9fa; border-bottom: 1px solid #e0e0e0;
+            }
+            .dark .crx-controls-container { background-color: #1e1e2d; border-bottom-color: #3e374e; }
+            #crx-layout-toggle {
+                background: none; border: none; cursor: pointer; color: #555; padding: 4px;
+                border-radius: 4px; transition: background-color 0.2s, color 0.2s;
+            }
+            #crx-layout-toggle:hover { background-color: #e0e0e0; color: #000; }
+            .dark #crx-layout-toggle { color: #aaa; }
+            .dark #crx-layout-toggle:hover { background-color: #3e374e; color: #fff; }
+
+            /* --- LAYOUT DE ABAS --- */
+            #crx-tabs-layout-container { display: flex; flex-direction: column; height: 100%; }
             .crx-filter-tabs {
                 display: flex; flex-shrink: 0; overflow-x: auto; padding: 0 8px;
                 background-color: #fff; scrollbar-width: thin; scrollbar-color: #ccc #f0f0f0;
-                border-bottom: 1px solid #e0e0e0; /* Adiciona uma borda sutil abaixo das abas */
+                border-bottom: 1px solid #e0e0e0;
             }
             .dark .crx-filter-tabs { background-color: #252535; scrollbar-color: #555 #3e374e; border-bottom-color: #3e374e; }
             .crx-filter-tabs::-webkit-scrollbar { height: 5px; }
@@ -142,43 +153,39 @@
             .crx-filter-tabs::-webkit-scrollbar-thumb { background-color: #ccc; border-radius: 10px; }
             .dark .crx-filter-tabs::-webkit-scrollbar-thumb { background-color: #555; }
             .crx-filter-tab {
-                padding: 12px 8px; margin: 0 8px; font-size: 14px; font-weight: 500;
+                padding: 10px 8px; margin: 0 8px; font-size: 13px; font-weight: 500;
                 color: #666; cursor: pointer; border-bottom: 3px solid transparent;
-                white-space: nowrap; transition: color 0.2s, border-color 0.2s, background-color 0.2s; /* Adiciona transição para background-color */
+                white-space: nowrap; transition: all 0.2s;
             }
             .dark .crx-filter-tab { color: #aaa; }
             .crx-filter-tab .count {
                 background-color: #f0f0f0; color: #555; border-radius: 10px;
-                padding: 1px 7px; font-size: 12px; margin-left: 6px;
+                padding: 1px 6px; font-size: 11px; margin-left: 6px;
             }
             .dark .crx-filter-tab .count { background-color: #3e374e; color: #ccc; }
-            .crx-filter-tab.active { font-weight: 600; /* Estilo padrão para o texto da aba ativa é sobrescrito pelo dynamicStyles */ }
+            .crx-filter-tab.active { font-weight: 600; }
 
-            /* Lista de Chats */
-            #crx-chat-list-container { flex-grow: 1; overflow-y: auto; }
-            #crx-chat-list-container::-webkit-scrollbar { width: 6px; }
-            #crx-chat-list-container::-webkit-scrollbar-track { background: transparent; }
-            #crx-chat-list-container::-webkit-scrollbar-thumb { background-color: #ccc; border-radius: 10px; }
-            .dark #crx-chat-list-container::-webkit-scrollbar-thumb { background-color: #4f4f5a; }
+            /* --- CONTAINER COMUM DA LISTA DE CHATS --- */
+            .crx-chat-list-container { flex-grow: 1; overflow-y: auto; }
+            .crx-chat-list-container::-webkit-scrollbar { width: 6px; }
+            .crx-chat-list-container::-webkit-scrollbar-track { background: transparent; }
+            .crx-chat-list-container::-webkit-scrollbar-thumb { background-color: #ccc; border-radius: 10px; }
+            .dark .crx-chat-list-container::-webkit-scrollbar-thumb { background-color: #4f4f5a; }
 
-            /* Cabeçalhos de Grupo */
-            .crx-my-chats-header, .crx-category-header {
+            /* Cabeçalhos de Grupo (Usado em ambos layouts) */
+            .crx-group-header {
                 padding: 12px 12px 4px; font-size: 13px; font-weight: 600; color: #6c757d;
                 text-transform: uppercase; position: sticky; top: 0; background: #fff; z-index: 10;
+                border-bottom: 1px solid #e0e0e0;
             }
-            .dark .crx-my-chats-header, .dark .crx-category-header { background: #252535; color: #a0a0b0; }
-            .crx-my-chats-header {
-                 border-bottom: 1px solid #e0e0e0; padding-bottom: 8px;
-            }
-            .dark .crx-my-chats-header { border-bottom-color: #3e374e; }
+            .dark .crx-group-header { background: #252535; color: #a0a0b0; border-bottom-color: #3e374e; }
 
-
-            /* Item de Chat Individual */
+            /* Item de Chat Individual (Estilo unificado) */
             .crx-tg-item {
                 display: flex; align-items: center; padding: 8px 12px;
                 border-bottom: 1px solid #f0f0f0; cursor: pointer; position: relative;
                 transition: background-color 0.15s ease-in-out;
-                border-left: 4px solid transparent; /* Base para cor e alertas */
+                border-left: 5px solid transparent;
             }
             .dark .crx-tg-item { border-bottom-color: #3e374e; }
             .crx-tg-item.active { background-color: #5e47d0 !important; color: white; border-left-color: #5e47d0 !important; }
@@ -193,10 +200,9 @@
             .crx-tg-item.active .crx-tg-avatar.is-icon { color: white; }
             .crx-tg-content { flex-grow: 1; overflow: hidden; }
             .crx-tg-title { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-            .crx-tg-subtitle { font-size: 13px; color: #666; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; display: flex; align-items: center; } /* Adicionado display:flex para alinhar tag */
+            .crx-tg-subtitle { font-size: 13px; color: #666; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; display: flex; align-items: center; }
             .dark .crx-tg-subtitle { color: #aaa; }
             .crx-tg-meta { position: absolute; right: 12px; top: 12px; }
-            /* Ícone de notificação */
             .crx-tg-badge {
                 background-color: #FFA500; width: 12px; height: 12px; border-radius: 50%;
                 border: 2px solid white;
@@ -205,7 +211,6 @@
             .crx-tg-item.active .crx-tg-badge { border-color: #5e47d0; }
             .crx-tg-item.is-waiting { border-left-color: #FFA500 !important; }
             .crx-tg-item.is-alert { border-left-color: #E57373 !important; }
-
 
             /* --- ESTILOS GERAIS (MODAL, BOTÕES, ETC) --- */
             @keyframes crx-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
@@ -233,7 +238,7 @@
     }
 
     // =================================================================================
-    // CAPTURA DE DADOS E REGISTRO DE SERVIÇO
+    // CAPTURA DE DADOS E REGISTRO DE SERVIÇO (Sem alterações)
     // =================================================================================
     function capturarDadosPagina() {
         let analista = '', numero = '', solicitante = '', revenda = '', servicoSelecionado = '';
@@ -359,7 +364,7 @@
     }
 
     // =================================================================================
-    // AUTO-REFRESH E LÓGICA DE ATUALIZAÇÃO
+    // AUTO-REFRESH E LÓGICA DE ATUALIZAÇÃO (Sem alterações)
     // =================================================================================
     function atualizarListasDeChat(isAutoRefresh = false) {
         const dashboardButton = document.querySelector('div[data-sidebar-option="dashboard"]');
@@ -423,7 +428,7 @@
     // =================================================================================
     // LÓGICA DE RENDERIZAÇÃO
     // =================================================================================
-    function createTelegramItemHtml(chatData, isTodosActive) { // isTodosActive passado como parâmetro
+    function createTelegramItemHtml(chatData, useCategoryTag = false) {
         const safeCategory = makeSafeForCSS(chatData.categoria);
         const classList = ['crx-tg-item', `crx-item-bg-${safeCategory}`];
         if (chatData.isActive) classList.push('active');
@@ -437,11 +442,10 @@
 
         const badgeHtml = chatData.hasNotification ? `<div class="crx-tg-meta"><div class="crx-tg-badge"></div></div>` : '';
 
-        let subTitleContent = chatData.revenda;
-        // Adiciona a tag colorida apenas se o filtro 'Todos' estiver ativo
-        if (isTodosActive) {
+        let subTitleContent = `<span>${chatData.revenda}</span>`;
+        if (useCategoryTag) {
             const categoryTag = `<span class="crx-category-tag crx-category-tag-${safeCategory}">${chatData.categoria.replace('Suporte - ', '')}</span>`;
-            subTitleContent = `${categoryTag}<span>${chatData.revenda}</span>`;
+            subTitleContent = `${categoryTag}${subTitleContent}`;
         }
 
         return `
@@ -453,6 +457,96 @@
                 </div>
                 ${badgeHtml}
             </div>`;
+    }
+
+    function renderTabsLayout(container, myChats, otherChats) {
+        const layoutContainer = document.createElement('div');
+        layoutContainer.id = 'crx-tabs-layout-container';
+
+        const categoryCounts = new Map();
+        otherChats.forEach(chat => {
+            categoryCounts.set(chat.categoria, (categoryCounts.get(chat.categoria) || 0) + 1);
+        });
+
+        let tabsHtml = `<div class="crx-filter-tab ${activeFilter === 'Todos' ? 'active' : ''}" data-filter="Todos">Todos <span class="count">${otherChats.length}</span></div>`;
+        for (const [category, count] of [...categoryCounts.entries()].sort()) {
+            tabsHtml += `<div class="crx-filter-tab ${activeFilter === category ? 'active' : ''}" data-filter="${category}">${category.replace('Suporte - ','')} <span class="count">${count}</span></div>`;
+        }
+        const tabsContainer = document.createElement('div');
+        tabsContainer.className = 'crx-filter-tabs';
+        tabsContainer.innerHTML = tabsHtml;
+        layoutContainer.appendChild(tabsContainer);
+
+        const chatListContainer = document.createElement('div');
+        chatListContainer.className = 'crx-chat-list-container';
+        let chatsHtml = '';
+        const isTodosActive = activeFilter === 'Todos';
+
+        if (myChats.length > 0) {
+            chatsHtml += `<div class="crx-group-header">Meus Chats (${myChats.length})</div>`;
+            myChats.sort((a, b) => (b.isAlert ? 2 : b.isWaiting ? 1 : 0) - (a.isAlert ? 2 : a.isWaiting ? 1 : 0))
+                   .forEach(chatData => { chatsHtml += createTelegramItemHtml(chatData, isTodosActive); });
+        }
+
+        const filteredChats = otherChats.filter(chat => activeFilter === 'Todos' || chat.categoria === activeFilter);
+        filteredChats.sort((a, b) => (b.isAlert ? 2 : b.isWaiting ? 1 : 0) - (a.isAlert ? 2 : a.isWaiting ? 1 : 0))
+                     .forEach(chatData => { chatsHtml += createTelegramItemHtml(chatData, isTodosActive); });
+
+        chatListContainer.innerHTML = chatsHtml;
+        layoutContainer.appendChild(chatListContainer);
+        container.appendChild(layoutContainer);
+
+        // Adiciona eventos de clique das abas
+        container.querySelectorAll('.crx-filter-tab').forEach(tab => {
+            tab.onclick = () => {
+                activeFilter = tab.getAttribute('data-filter');
+                renderCustomChatList(); // Re-renderiza tudo
+            };
+        });
+    }
+
+    function renderListLayout(container, myChats, otherChats) {
+        const layoutContainer = document.createElement('div');
+        layoutContainer.id = 'crx-list-layout-container';
+        layoutContainer.className = 'crx-chat-list-container'; // Reutiliza o estilo de scroll
+        let chatsHtml = '';
+
+        if (myChats.length > 0) {
+            chatsHtml += `<div class="crx-group-header">Meus Chats (${myChats.length})</div>`;
+            myChats.sort((a, b) => (b.isAlert ? 2 : b.isWaiting ? 1 : 0) - (a.isAlert ? 2 : a.isWaiting ? 1 : 0))
+                   .forEach(chatData => { chatsHtml += createTelegramItemHtml(chatData, false); });
+        }
+
+        const groupedChats = otherChats.reduce((acc, chat) => {
+            (acc[chat.categoria] = acc[chat.categoria] || []).push(chat);
+            return acc;
+        }, {});
+
+        Object.keys(groupedChats).sort().forEach(category => {
+            const group = groupedChats[category];
+            chatsHtml += `<div class="crx-group-header">${category} (${group.length})</div>`;
+            group.sort((a, b) => (b.isAlert ? 2 : b.isWaiting ? 1 : 0) - (a.isAlert ? 2 : a.isWaiting ? 1 : 0))
+                 .forEach(chatData => { chatsHtml += createTelegramItemHtml(chatData, false); });
+        });
+
+        layoutContainer.innerHTML = chatsHtml;
+        container.appendChild(layoutContainer);
+    }
+
+    function addControls(container) {
+        const controlsContainer = document.createElement('div');
+        controlsContainer.className = 'crx-controls-container';
+        const layoutBtn = document.createElement('button');
+        layoutBtn.id = 'crx-layout-toggle';
+        layoutBtn.title = 'Alternar Layout (Abas/Lista)';
+        layoutBtn.innerHTML = LAYOUT_ICON_SVG;
+        layoutBtn.onclick = () => {
+            activeLayout = (activeLayout === 'tabs') ? 'list' : 'tabs';
+            GM_setValue('activeLayout', activeLayout);
+            renderCustomChatList();
+        };
+        controlsContainer.appendChild(layoutBtn);
+        container.appendChild(controlsContainer);
     }
 
     function renderCustomChatList() {
@@ -490,68 +584,17 @@
 
         // --- Inicia a construção do HTML ---
         crxMainContainer.innerHTML = ''; // Limpa antes de redesenhar
+        crxMainContainer.className = 'crx-layout-' + activeLayout;
 
-        // Controles (Layout Toggle) - REMOVIDO
-        // const controlsContainer = document.createElement('div');
-        // controlsContainer.className = 'crx-controls-container';
-        // const layoutBtn = document.createElement('button');
-        // layoutBtn.id = 'crx-layout-toggle';
-        // layoutBtn.title = 'Alternar Layout (Abas/Lista)';
-        // layoutBtn.innerHTML = LAYOUT_ICON_SVG;
-        // layoutBtn.onclick = () => {
-        //     activeLayout = (activeLayout === 'tabs') ? 'list' : 'tabs';
-        //     GM_setValue('activeLayout', activeLayout);
-        //     renderCustomChatList();
-        // };
-        // controlsContainer.appendChild(layoutBtn);
-        // crxMainContainer.appendChild(controlsContainer);
+        addControls(crxMainContainer);
 
-        let chatsHtml = '';
-
-        const chatListContainer = document.createElement('div');
-        chatListContainer.id = 'crx-chat-list-container';
-        crxMainContainer.appendChild(chatListContainer); // Adiciona o container da lista principal
-
-        const isTodosActive = activeFilter === 'Todos';
-        chatListContainer.classList.toggle('crx-filter-active', !isTodosActive); // Aplica a classe ao container
-
-        if (myChatsData.length > 0) {
-            chatsHtml += `<div class="crx-my-chats-header">Meus Chats (${myChatsData.length})</div>`;
-            myChatsData
-                .sort((a, b) => (b.isAlert ? 2 : b.isWaiting ? 1 : 0) - (a.isAlert ? 2 : a.isWaiting ? 1 : 0))
-                .forEach(chatData => { chatsHtml += createTelegramItemHtml(chatData, isTodosActive); });
+        if (activeLayout === 'tabs') {
+            renderTabsLayout(crxMainContainer, myChatsData, otherChatsData);
+        } else {
+            renderListLayout(crxMainContainer, myChatsData, otherChatsData);
         }
 
-        // --- Lógica de Renderização Fixo para Abas ---
-        const categoryCounts = new Map();
-        otherChatsData.forEach(chat => {
-            categoryCounts.set(chat.categoria, (categoryCounts.get(chat.categoria) || 0) + 1);
-        });
-
-        let tabsHtml = `<div class="crx-filter-tab ${activeFilter === 'Todos' ? 'active' : ''}" data-filter="Todos">Todos <span class="count">${otherChatsData.length}</span></div>`;
-        for (const [category, count] of [...categoryCounts.entries()].sort()) {
-            tabsHtml += `<div class="crx-filter-tab ${activeFilter === category ? 'active' : ''}" data-filter="${category}">${category.replace('Suporte - ','')} <span class="count">${count}</span></div>`;
-        }
-
-        const tabsContainer = document.createElement('div');
-        tabsContainer.className = 'crx-filter-tabs';
-        tabsContainer.innerHTML = tabsHtml;
-        crxMainContainer.appendChild(tabsContainer);
-
-        const filteredChats = otherChatsData.filter(chat => activeFilter === 'Todos' || chat.categoria === activeFilter);
-        filteredChats
-            .sort((a, b) => (b.isAlert ? 2 : b.isWaiting ? 1 : 0) - (a.isAlert ? 2 : b.isWaiting ? 1 : 0))
-            .forEach(chatData => { chatsHtml += createTelegramItemHtml(chatData, isTodosActive); });
-
-        chatListContainer.innerHTML = chatsHtml; // Preenche o container da lista
-
-        // --- Adiciona eventos de clique ---
-        crxMainContainer.querySelectorAll('.crx-filter-tab').forEach(tab => {
-            tab.onclick = () => {
-                activeFilter = tab.getAttribute('data-filter');
-                renderCustomChatList();
-            };
-        });
+        // --- Adiciona eventos de clique a todos os itens renderizados ---
         crxMainContainer.querySelectorAll('.crx-tg-item').forEach(item => {
             const itemId = item.getAttribute('data-item-id');
             const correspondingChatData = allChatsData.find(d => d.id === itemId);
