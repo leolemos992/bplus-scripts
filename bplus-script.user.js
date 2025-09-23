@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         B.Plus! - Contador de Atendimentos & Melhorias Beemore
 // @namespace    http://tampermonkey.net/
-// @version      9.3
+// @version      9.4
 // @description  Adiciona seletor de layout (Abas ou Lista), reintroduz cores nos itens, melhora o ícone de notificação e adiciona rolagem horizontal às abas.
 // @author       Jose Leonardo Lemos & Gemini
 // @match        https://*.beemore.com/*
