@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         B.PLUS
 // @namespace    http://tampermonkey.net/
-// @version      16.5 // Correção crítica de clique: Garante que o chat correto seja aberto.
-// @description  Renderização otimizada de chats com correção de referência de clique para garantir a abertura correta da conversa.
+// @version      15.0.6 // Híbrido: Fundação estável (v10) + Features e correções de clique (v15).
+// @description  Combina a estabilidade da renderização do v10 com os recursos e a precisão de dados do v15, incluindo a correção definitiva para cliques incorretos e a exibição de chats em espera.
 // @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
 // @grant        GM_addStyle
@@ -16,8 +16,8 @@
 
     // --- CONFIGURAÇÕES GERAIS ---
     const CONFIG = {
-        SCRIPT_VERSION: GM_info.script.version || '15.0.5',
-        UPDATE_DEBOUNCE_MS: 250, // Reduzido para resposta mais rápida
+        SCRIPT_VERSION: GM_info.script.version || '15.0.6',
+        UPDATE_INTERVAL_MS: 1500, // Intervalo para verificar mudanças no DOM
     };
 
     // --- ÍCONES SVG ---
@@ -31,10 +31,7 @@
     // --- SELETORES DE DOM ---
     const SELECTORS = {
         mainContainer: 'app-chat-list-container > section',
-        originalChatLists: 'app-chat-list, app-queue-list',
         allChatItems: 'app-chat-list-item, app-queue-item',
-        alertIcon: 'app-icon[icon="tablerAlertCircle"]',
-        statusTag: 'app-tag',
         unreadCountBadge: 'div[class*="bg-red-600"]',
         serviceWarningIcon: 'app-icon[icon="tablerExclamationCircle"]'
     };
@@ -44,9 +41,7 @@
         activeFilter: 'Todos',
         activeLayout: GM_getValue('activeLayout', 'tabs'),
         collapsedGroups: new Set(JSON.parse(GM_getValue('collapsedGroups', '[]'))),
-        // A chave será o elemento HTML original, e o valor será o {dados, elemento customizado}
-        // Isso nos permite associar diretamente o elemento original ao seu gêmeo customizado.
-        renderedChats: new Map(),
+        lastChatCount: 0,
         isInitialized: false,
     };
 
@@ -54,12 +49,11 @@
     // FUNÇÕES UTILITÁRIAS
     // =================================================================================
     const log = (message) => console.log(`[B.Plus! v${CONFIG.SCRIPT_VERSION}] ${message}`);
-    const debounce = (func, delay) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => func.apply(this, a), delay); }; };
     const makeSafeForCSS = (name) => name.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase();
     const hexToRgba = (hex, alpha) => {
-        let r = 0, g = 0, b = 0;
-        if (hex.length === 4) { r = parseInt(hex[1] + hex[1], 16); g = parseInt(hex[2] + hex[2], 16); b = parseInt(hex[3] + hex[3], 16); }
-        else if (hex.length === 7) { r = parseInt(hex.substring(1, 3), 16); g = parseInt(hex.substring(3, 5), 16); b = parseInt(hex.substring(5, 7), 16); }
+        let r=0,g=0,b=0;
+        if(hex.length==4){r=parseInt(hex[1]+hex[1],16);g=parseInt(hex[2]+hex[2],16);b=parseInt(hex[3]+hex[3],16);}
+        else if(hex.length==7){r=parseInt(hex.substring(1,3),16);g=parseInt(hex.substring(3,5),16);b=parseInt(hex.substring(5,7),16);}
         return `rgba(${r},${g},${b},${alpha})`;
     };
     const waitForElement = (selector) => new Promise(resolve => {
@@ -77,11 +71,22 @@
     // =================================================================================
     function injectStyles() {
         if (document.getElementById('bplus-custom-styles')) return;
-        const CATEGORY_COLORS = { /* ... Cores ... */ };
-        let dynamicStyles = '';
+        const CATEGORY_COLORS = {
+            'Suporte - Web': '#3498db', 'Suporte - PDV': '#2ecc71', 'Suporte - Retaguarda': '#f39c12',
+            'Suporte - Fiscal': '#e74c3c', 'Suporte - Mobile': '#9b59b6', 'Sem Categoria': '#95a5a6'
+        };
+        let dynamicStyles = Object.entries(CATEGORY_COLORS).map(([category, color]) => {
+            const safeCategory = makeSafeForCSS(category);
+            return `
+                .crx-filter-tab[data-filter="${category}"].active { background-color: ${color} !important; color: white !important; }
+                .crx-item-bg-${safeCategory} { border-left-color: ${color} !important; background-color: ${hexToRgba(color, 0.08)} !important; }
+                .dark .crx-item-bg-${safeCategory} { background-color: ${hexToRgba(color, 0.15)} !important; }
+            `;
+        }).join('');
+
         GM_addStyle(`
             #bplus-custom-styles{display:none}
-            body.bplus-active app-chat-list-container>section>:is(app-chat-list,app-queue-list){display:none!important}
+            body.bplus-active app-chat-list-container > section > :is(app-chat-list, app-queue-list) { display: none !important; }
             #crx-main-container{display:flex;flex-direction:column;height:100%;overflow:hidden}
             .crx-layout-tabs #crx-list-layout-container,.crx-layout-list #crx-tabs-layout-container{display:none}
             .crx-controls-container{display:flex;justify-content:flex-end;padding:4px 8px;background-color:var(--primary-100,#fff);border-bottom:1px solid var(--border-color,#e0e0e0)}
@@ -133,22 +138,63 @@
     // LÓGICA DE DADOS E RENDERIZAÇÃO
     // =================================================================================
     function parseChatItemData(itemElement) {
-        // ... (lógica de parsing inalterada) ...
-        return { /* ... dados do chat ... */ };
+        let solicitante = 'Usuário Desconhecido';
+        let revenda = 'Sem Revenda';
+        let categoria = 'Sem Categoria';
+
+        const mainSection = itemElement.querySelector('section');
+        if (mainSection) {
+            const topDiv = mainSection.querySelector('div');
+            if (topDiv) {
+                solicitante = topDiv.querySelector('span.font-medium')?.innerText.trim() || solicitante;
+                categoria = topDiv.querySelector('span.shrink-0')?.innerText.trim() || categoria;
+            }
+            const revendaElement = topDiv?.nextElementSibling;
+            if (revendaElement && revendaElement.tagName === 'SPAN') {
+                const tempRevendaText = revendaElement.innerText.trim();
+                const waitingTextMatch = tempRevendaText.match(/Aguardando(\s\(.*\))?/);
+                let cleanedRevendaText = tempRevendaText;
+                if (waitingTextMatch) cleanedRevendaText = tempRevendaText.replace(waitingTextMatch[0], '').trim();
+                if (cleanedRevendaText) revenda = cleanedRevendaText;
+            }
+        }
+        
+        const unreadElement = itemElement.querySelector(SELECTORS.unreadCountBadge);
+        const unreadCount = unreadElement ? parseInt(unreadElement.innerText, 10) || 0 : 0;
+        
+        const serviceWarningElement = itemElement.querySelector(SELECTORS.serviceWarningIcon);
+        const hasServiceWarning = !!serviceWarningElement;
+        const originalServiceWarningButton = hasServiceWarning ? serviceWarningElement.closest('button') : null;
+
+        const isWaiting = Array.from(itemElement.querySelectorAll('app-tag')).some(tag => tag.textContent?.toLowerCase().includes('aguardando'));
+        const isAlert = !isWaiting && !!itemElement.querySelector(SELECTORS.alertIcon);
+
+        return {
+            solicitante, revenda, categoria, isWaiting, isAlert,
+            unreadCount, hasServiceWarning, originalServiceWarningButton,
+            isActive: itemElement.classList.contains('active'),
+            isMyChat: !!itemElement.closest('app-chat-list')?.querySelector('header span')?.textContent.includes('Meus chats'),
+            originalElement: itemElement,
+        };
     }
 
-    function createChatItemElement(chatData) {
+    function createAndAppendCustomItem(container, chatData) {
         const item = document.createElement('div');
-        // A MUDANÇA MAIS IMPORTANTE:
-        // O event listener agora está vinculado diretamente à referência do elemento original
-        // que foi passada no objeto chatData. Isso é garantido e sempre atualizado.
         item.addEventListener('click', () => chatData.originalElement.click());
+        
+        const safeCategory = makeSafeForCSS(chatData.categoria);
+        item.className = `crx-tg-item crx-item-bg-${safeCategory}`;
+        if(chatData.isActive) item.classList.add('active');
+        if(chatData.isAlert) item.classList.add('is-alert');
+        if(chatData.isWaiting) item.classList.add('is-waiting');
+        item.dataset.category = chatData.categoria;
+
         item.innerHTML = `
             <div class="crx-tg-avatar is-icon">${ICONS.USER}</div>
             <div class="crx-tg-content">
-                <div class="crx-tg-title"></div>
+                <div class="crx-tg-title">${chatData.solicitante}</div>
                 <div class="crx-tg-subtitle">
-                    <span></span>
+                    <span>${chatData.revenda}</span>
                     <span class="crx-service-warning-icon" title="Serviço incorreto"></span>
                 </div>
             </div>
@@ -156,80 +202,189 @@
                 <span class="crx-unread-badge"></span>
             </div>
         `;
-        updateChatItemElement(item, chatData);
-        return item;
-    }
+        
+        const unreadBadge = item.querySelector('.crx-unread-badge');
+        if (chatData.unreadCount > 0) {
+            unreadBadge.textContent = chatData.unreadCount;
+            unreadBadge.style.display = 'block';
+        }
 
-    function updateChatItemElement(element, data) {
-        // ... (lógica de atualização inalterada) ...
+        const warningIcon = item.querySelector('.crx-service-warning-icon');
+        if (chatData.hasServiceWarning && chatData.originalServiceWarningButton) {
+            warningIcon.innerHTML = ICONS.WARNING;
+            warningIcon.style.display = 'inline-flex';
+            warningIcon.onclick = (e) => {
+                e.stopPropagation();
+                chatData.originalServiceWarningButton.click();
+            };
+        }
+        
+        container.appendChild(item);
     }
     
-    // As funções que não precisam de alteração foram omitidas para manter o código limpo.
-    // O código completo deve ser usado no script final.
-    function renderInitialShell(container) { /* ... */ }
-    function updateFullUI(forceRebuild = false) { /* ... */ }
-    function appendGroupToFragment(fragment, title, chats, groupKey) { /* ... */ }
-    function applyChatFilter() { /* ... */ }
-    function updateTabsLayout(waiting, my, other) { /* ... */ }
-    function updateListLayout(waiting, my, other) { /* ... */ }
-    
     // =================================================================================
-    // NÚCLEO DA CORREÇÃO - LÓGICA DE SINCRONIZAÇÃO
+    // LÓGICA DE RENDERIZAÇÃO E ATUALIZAÇÃO
     // =================================================================================
-    const updateChatList = debounce(() => {
-        // 1. Obtém a lista atual de todos os itens de chat originais do Beemore.
+    function rebuildAndRenderUI() {
         const allOriginalItems = Array.from(document.querySelectorAll(SELECTORS.allChatItems));
         
-        // 2. Cria um novo Map para armazenar a nova lista de chats renderizados.
-        //    Isso garante que estamos sempre trabalhando com dados frescos.
-        const newRenderedChats = new Map();
+        if (allOriginalItems.length === STATE.lastChatCount && document.getElementById('crx-main-container')) {
+            // Se o número de chats não mudou, podemos pular a reconstrução completa para evitar piscar a tela
+            // Apenas atualizamos o filtro se necessário.
+            if(STATE.activeLayout === 'tabs') applyChatFilter();
+            return;
+        }
+        STATE.lastChatCount = allOriginalItems.length;
+
+        const mainContainer = document.getElementById('crx-main-container');
+        if (!mainContainer) return;
+
+        mainContainer.className = 'crx-layout-' + STATE.activeLayout;
+
+        const allChatsData = allOriginalItems.map(parseChatItemData);
         
-        // 3. Itera sobre cada item original encontrado na página.
-        allOriginalItems.forEach(originalElement => {
-            // Extrai os dados visuais do elemento original.
-            const data = parseChatItemData(originalElement);
-            
-            // Cria um novo elemento customizado para a nossa UI.
-            // O `chatData` passado para esta função contém a referência `originalElement`,
-            // que é a chave para o clique funcionar corretamente.
-            const customElement = createChatItemElement(data);
-            
-            // Armazena no novo Map, usando o elemento original como chave.
-            newRenderedChats.set(originalElement, { data: data, element: customElement });
+        const sortFn = (a, b) => (b.isAlert - a.isAlert) || (b.isWaiting - a.isWaiting);
+        const waitingChats = allChatsData.filter(c => c.isWaiting).sort(sortFn);
+        const remaining = allChatsData.filter(c => !c.isWaiting);
+        const myChats = remaining.filter(c => c.isMyChat).sort(sortFn);
+        const otherChats = remaining.filter(c => !c.isMyChat).sort(sortFn);
+
+        if (STATE.activeLayout === 'tabs') {
+            updateTabsLayout(waitingChats, myChats, otherChats);
+        } else {
+            updateListLayout(waitingChats, myChats, otherChats);
+        }
+    }
+
+    function updateTabsLayout(waiting, my, other) {
+        let container = document.getElementById('crx-tabs-layout-container');
+        if(!container) return;
+        
+        const allChats = [...waiting, ...my, ...other];
+        const counts = allChats.reduce((a, c) => (a.set(c.categoria, (a.get(c.categoria) || 0) + 1), a), new Map());
+        
+        let tabsHtml = `<div class="crx-filter-tab ${STATE.activeFilter === 'Todos' ? 'active' : ''}" data-filter="Todos">Todos <span class="count">${allChats.length}</span></div>` + 
+                       [...counts.entries()].sort().map(([cat, cnt]) => `<div class="crx-filter-tab ${STATE.activeFilter === cat ? 'active' : ''}" data-filter="${cat}">${cat.replace('Suporte - ','')} <span class="count">${cnt}</span></div>`).join('');
+        
+        const tabsContainer = container.querySelector('.crx-filter-tabs');
+        if (tabsContainer) tabsContainer.innerHTML = tabsHtml;
+
+        const listContainer = container.querySelector('.crx-chat-list-container');
+        if (listContainer) {
+            listContainer.innerHTML = '';
+            appendGroupsToContainer(listContainer, waiting, my, other);
+            applyChatFilter();
+        }
+
+        tabsContainer.querySelectorAll('.crx-filter-tab').forEach(t => t.onclick = (e) => {
+            STATE.activeFilter = e.currentTarget.dataset.filter;
+            rebuildAndRenderUI();
         });
+    }
+
+    function updateListLayout(waiting, my, other) {
+        let listContainer = document.getElementById('crx-list-layout-container');
+        if(!listContainer) return;
+        listContainer.innerHTML = '';
+        appendGroupsToContainer(listContainer, waiting, my, other);
+    }
+    
+    function appendGroupsToContainer(container, waiting, my, other) {
+        appendGroupToFragment(container, "Aguardando Atendimento", waiting, "group_waiting");
+        appendGroupToFragment(container, "Meus Chats", my, "group_mychats");
+
+        const grouped = other.reduce((a, c) => ((a[c.categoria] = a[c.categoria] || []).push(c), a), {});
+        Object.keys(grouped).sort().forEach(cat => appendGroupToFragment(container, cat, grouped[cat], `group_${makeSafeForCSS(cat)}`));
+    }
+
+    function appendGroupToFragment(container, title, chats, groupKey) {
+        if (chats.length === 0) return;
+
+        const isCollapsed = STATE.collapsedGroups.has(groupKey);
+        const header = document.createElement('div');
+        header.className = `crx-group-header ${isCollapsed ? 'collapsed' : ''}`;
+        header.dataset.groupKey = groupKey;
+        header.dataset.originalTitle = title;
+        if (groupKey === 'group_waiting') header.classList.add('group-waiting');
+        header.innerHTML = `<span>${title} (${chats.length})</span><span class="crx-chevron">${ICONS.CHEVRON}</span>`;
         
-        // 4. Substitui completamente o estado antigo pelo novo.
-        //    Isso descarta quaisquer referências antigas e inválidas.
-        STATE.renderedChats = newRenderedChats;
+        const itemsContainer = document.createElement('div');
+        itemsContainer.className = `crx-chat-group-items ${isCollapsed ? 'collapsed' : ''}`;
         
-        // 5. Força uma reconstrução completa da UI com os novos elementos e referências corretas.
-        updateFullUI(true);
+        chats.forEach(chatData => createAndAppendCustomItem(itemsContainer, chatData));
+        
+        header.addEventListener('click', () => {
+            STATE.collapsedGroups.has(groupKey) ? STATE.collapsedGroups.delete(groupKey) : STATE.collapsedGroups.add(groupKey);
+            GM_setValue('collapsedGroups', JSON.stringify(Array.from(STATE.collapsedGroups)));
+            header.classList.toggle('collapsed');
+            itemsContainer.classList.toggle('collapsed');
+        });
 
-    }, CONFIG.UPDATE_DEBOUNCE_MS);
+        container.append(header, itemsContainer);
+    }
 
-    // ... (O resto do script que não foi alterado)
+    function applyChatFilter() {
+        const listContainer = document.querySelector('#crx-tabs-layout-container .crx-chat-list-container');
+        if (!listContainer) return;
 
-    async function initialize() {
+        listContainer.querySelectorAll('.crx-group-header').forEach(header => {
+            const itemsContainer = header.nextElementSibling;
+            if (!itemsContainer) return;
+
+            let visibleItemsCount = 0;
+            Array.from(itemsContainer.children).forEach(item => {
+                const isVisible = STATE.activeFilter === 'Todos' || item.dataset.category === STATE.activeFilter;
+                item.style.display = isVisible ? '' : 'none';
+                if (isVisible) visibleItemsCount++;
+            });
+
+            header.style.display = visibleItemsCount > 0 ? '' : 'none';
+            header.querySelector('span:first-child').textContent = `${header.dataset.originalTitle} (${visibleItemsCount})`;
+        });
+    }
+
+    // =================================================================================
+    // INICIALIZAÇÃO
+    // =================================================================================
+    function initialize() {
         if (STATE.isInitialized) return;
-        injectStyles();
-        await waitForElement(SELECTORS.allChatItems);
-        log("Chats originais detectados. Iniciando UI do B.Plus!.");
-
         STATE.isInitialized = true;
+        
+        injectStyles();
+        
         const mainSection = document.querySelector(SELECTORS.mainContainer);
         if (!mainSection) { log("ERRO: Container principal não encontrado."); return; }
+        
+        const shell = document.createElement('div');
+        shell.id = 'crx-main-container';
+        shell.innerHTML = `
+            <div class="crx-controls-container">
+                <button id="crx-layout-toggle" title="Alternar Layout">${ICONS.LAYOUT}</button>
+            </div>
+            <div id="crx-tabs-layout-container">
+                <div class="crx-filter-tabs"></div>
+                <div class="crx-chat-list-container"></div>
+            </div>
+            <div id="crx-list-layout-container" class="crx-chat-list-container"></div>`;
+        mainSection.appendChild(shell);
 
-        renderInitialShell(mainSection);
+        document.getElementById('crx-layout-toggle').addEventListener('click', () => {
+            STATE.activeLayout = (STATE.activeLayout === 'tabs') ? 'list' : 'tabs';
+            GM_setValue('activeLayout', STATE.activeLayout);
+            rebuildAndRenderUI();
+        });
+
         document.body.classList.add('bplus-active');
         
-        // Primeira execução para popular a lista
-        updateChatList();
-
-        // Observa o container para futuras mudanças
-        const observer = new MutationObserver(updateChatList);
+        // Usa um MutationObserver para disparar a reconstrução de forma eficiente
+        const observer = new MutationObserver(rebuildAndRenderUI);
         observer.observe(mainSection, { childList: true, subtree: true });
+
+        // Execução inicial
+        rebuildAndRenderUI();
+        
         log("B.Plus! carregado e monitorando.");
     }
     
-    if (document.readyState === 'loading') { document.addEventListener('DOMContentLoaded', initialize); } else { initialize(); }
+    waitForElement(SELECTORS.allChatItems).then(initialize);
 })();
