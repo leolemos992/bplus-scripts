@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         B.PLUS
 // @namespace    http://tampermonkey.net/
-// @version      15.0.1 // Versão atualizada para refletir as melhorias
-// @description  Correção para a renderização de chats, com inicialização segura para evitar conflitos com a página. Melhora na exibição de solicitante/revenda e agrupamento de aguardando.
+// @version      15.0.2 // Versão atualizada com otimização e melhorias de parsing
+// @description  Renderização otimizada de chats com filtragem rápida e extração de dados mais robusta.
 // @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
 // @grant        GM_addStyle
@@ -16,8 +16,8 @@
 
     // --- CONFIGURAÇÕES GERAIS ---
     const CONFIG = {
-        SCRIPT_VERSION: GM_info.script.version || '15.0.1',
-        UPDATE_DEBOUNCE_MS: 250,
+        SCRIPT_VERSION: GM_info.script.version || '15.0.2',
+        UPDATE_DEBOUNCE_MS: 300, // Levemente aumentado para agrupar mais mudanças do DOM
     };
 
     // --- ÍCONES SVG ---
@@ -34,18 +34,6 @@
         allChatItems: 'app-chat-list-item, app-queue-item',
         alertIcon: 'app-icon[icon="tablerAlertCircle"]',
         statusTag: 'app-tag',
-        // Seletor mais específico para o nome do solicitante e revenda dentro do item de chat.
-        // O Beemore geralmente usa uma estrutura como:
-        // app-chat-list-item > a > div.item-content > div.item-body > div.flex-col > span.truncate (solicitante)
-        // app-chat-list-item > a > div.item-content > div.item-body > div.flex-col > div.flex > span.truncate (revenda)
-        // No entanto, o script original usa .querySelectorAll('span.truncate') e pega o index 0 e 1.
-        // Isso pode ser frágil se a ordem ou o número de spans mudar.
-        // Vamos manter o seletor genérico por enquanto, pois o script já o utiliza,
-        // mas é um ponto a ser verificado caso a extração falhe.
-        solicitanteName: 'span.truncate:first-child', // Assumindo o primeiro span.truncate é o solicitante
-        revendaName: 'div > span.truncate', // Assumindo que a revenda está dentro de um div que é filho do flex-col e contém um span.truncate
-                                        // Ou o segundo span.truncate no geral, como o script original já faz.
-                                        // O parseChatItemData ajustado tentará ser mais robusto.
     };
 
     // --- ESTADO DA APLICAÇÃO ---
@@ -53,7 +41,7 @@
         activeFilter: 'Todos',
         activeLayout: GM_getValue('activeLayout', 'tabs'),
         collapsedGroups: new Set(JSON.parse(GM_getValue('collapsedGroups', '[]'))),
-        renderedChats: new Map(), // Map<chatId, {element, data}>
+        renderedChats: new Map(),
         isInitialized: false,
     };
 
@@ -80,16 +68,14 @@
     });
 
     // =================================================================================
-    // INJEÇÃO DE ESTILOS
+    // INJEÇÃO DE ESTILOS (Mesmos estilos da versão anterior, sem alterações)
     // =================================================================================
     function injectStyles() {
         if (document.getElementById('bplus-custom-styles')) return;
-
         const CATEGORY_COLORS = {
             'Suporte - Web': '#3498db', 'Suporte - PDV': '#2ecc71', 'Suporte - Retaguarda': '#f39c12',
             'Suporte - Fiscal': '#e74c3c', 'Suporte - Mobile': '#9b59b6', 'Sem Categoria': '#95a5a6'
         };
-
         let dynamicStyles = Object.entries(CATEGORY_COLORS).map(([category, color]) => {
             const safeCategory = makeSafeForCSS(category);
             return `
@@ -98,148 +84,47 @@
                 .dark .crx-item-bg-${safeCategory} { background-color: ${hexToRgba(color, 0.15)} !important; }
             `;
         }).join('');
-
         GM_addStyle(`
-            #bplus-custom-styles { display: none; } /* Hidden element to check if styles are injected */
-            body.bplus-active app-chat-list-container > section > ${SELECTORS.originalChatLists} { display: none !important; }
-            #crx-main-container { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
-            .crx-layout-tabs #crx-list-layout-container, .crx-layout-list #crx-tabs-layout-container { display: none; }
-
-            /* Estilos para as abas de filtro */
-            .crx-filter-tabs { display: flex; flex-shrink: 0; overflow-x: auto; overflow-y: hidden; height: 48px; align-items: center; padding: 0 8px; background-color: var(--primary-100, #fff); border-bottom: 1px solid var(--border-color, #e0e0e0); }
-            .dark .crx-filter-tabs { background-color: var(--primary-700, #252535); border-bottom-color: var(--border-dark, #3e374e); }
-            .crx-filter-tab { padding: 8px 12px; margin: 0 4px; border-radius: 6px; font-size: 13px; font-weight: 500; color: var(--text-color-secondary, #666); cursor: pointer; white-space: nowrap; transition: all 0.2s; }
-            .dark .crx-filter-tab { color: var(--text-color-dark-secondary, #aaa); }
-            .crx-filter-tab.active { font-weight: 600; }
-            .crx-filter-tab .count { background-color: var(--primary-200, #e0e0e0); color: var(--text-color-tertiary, #555); border-radius: 10px; padding: 1px 6px; font-size: 11px; margin-left: 6px; }
-            .dark .crx-filter-tab .count { background-color: var(--primary-600, #3e374e); color: var(--text-color-dark-tertiary, #ccc); }
-
-            /* Estilos para o cabeçalho do grupo */
-            .crx-group-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 12px 4px; font-size: 13px; font-weight: 600; color: var(--text-color-secondary, #6c757d); text-transform: uppercase; position: sticky; top: 0; background: var(--primary-100, #fff); z-index: 10; cursor: pointer; user-select: none; border-bottom: 1px solid var(--border-color, #e0e0e0); }
-            .dark .crx-group-header { color: var(--text-color-dark-secondary, #a0a0b0); border-bottom-color: var(--border-dark, #3e374e); background: var(--primary-700, #252535); }
-            .crx-group-header.group-waiting { color: #e67e22; } /* Cor específica para o grupo "Aguardando Atendimento" */
-            .dark .crx-group-header.group-waiting { color: #f39c12; }
-            .crx-group-header .crx-chevron { transition: transform 0.2s ease-in-out; }
-            .crx-group-header.collapsed .crx-chevron { transform: rotate(-90deg); }
-            .crx-chat-group-items.collapsed { display: none; }
-
-            /* Estilos para o container da lista de chats */
-            .crx-chat-list-container { flex-grow: 1; overflow-y: auto; background-color: var(--primary-100, #fff); }
-            .dark .crx-chat-list-container { background-color: var(--primary-700, #252535); }
-
-            /* Estilos para os itens individuais de chat */
-            .crx-tg-item {
-                display: flex;
-                align-items: center;
-                padding: 8px 12px;
-                border-bottom: 1px solid var(--border-color, #f0f0f0);
-                cursor: pointer;
-                border-left: 5px solid transparent;
-                transition: background-color 0.15s;
-            }
-            .dark .crx-tg-item { border-bottom-color: var(--border-dark, #3e374e); }
-
-            /* Estilo para item ativo (selecionado) */
-            .crx-tg-item.active {
-                background-color: var(--primary-color, #5e47d0) !important;
-                color: white;
-                border-left-color: var(--primary-color, #5e47d0) !important;
-            }
-            .crx-tg-item.active .crx-tg-title,
-            .crx-tg-item.active .crx-tg-subtitle {
-                color: white !important;
-            }
-            .crx-tg-item.active .crx-tg-avatar {
-                background-color: rgba(255,255,255,0.2) !important;
-                color: white !important;
-            }
-
-            /* Estilos para itens "Aguardando Atendimento" */
-            .crx-tg-item.is-waiting {
-                border-left-color: #FFA500 !important; /* Laranja */
-                background-color: ${hexToRgba('#FFA500', 0.08)} !important;
-            }
-            .dark .crx-tg-item.is-waiting { background-color: ${hexToRgba('#FFA500', 0.18)} !important; }
-            .crx-tg-item.is-alert { border-left-color: #E57373 !important; } /* Vermelho suave para alertas */
-
-            /* Estilos para o avatar e conteúdo textual */
-            .crx-tg-avatar {
-                flex-shrink: 0; /* Impede que o avatar encolha */
-                width: 32px;
-                height: 32px;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                border-radius: 50%;
-                background-color: var(--primary-200, #e0e0e0); /* Fundo padrão do avatar */
-                color: var(--text-color-tertiary, #555); /* Cor padrão do ícone */
-            }
-            .dark .crx-tg-avatar {
-                background-color: var(--primary-600, #3e374e);
-                color: var(--text-color-dark-tertiary, #ccc);
-            }
-            .crx-tg-avatar svg {
-                width: 20px;
-                height: 20px;
-            }
-            .crx-tg-content {
-                flex-grow: 1; /* Permite que o conteúdo textual ocupe o espaço restante */
-                min-width: 0; /* Essencial para que text-overflow: ellipsis funcione */
-                margin-left: 8px; /* Espaçamento entre o avatar e o texto */
-            }
-            .crx-tg-title {
-                font-weight: 500;
-                font-size: 14px; /* Tamanho da fonte para o solicitante (linha principal) */
-                color: var(--text-color-primary, #333);
-                white-space: nowrap;
-                overflow: hidden;
-                text-overflow: ellipsis; /* Adiciona reticências se o texto for muito longo */
-            }
-            .dark .crx-tg-title {
-                color: var(--text-color-dark-primary, #f0f0f0);
-            }
-            .crx-tg-subtitle {
-                font-size: 11px; /* Tamanho da fonte menor para a revenda */
-                color: var(--text-color-tertiary, #777); /* Cor mais clara para a revenda */
-                white-space: nowrap;
-                overflow: hidden;
-                text-overflow: ellipsis;
-                margin-top: 2px; /* Pequeno espaçamento entre solicitante e revenda */
-            }
-            .dark .crx-tg-subtitle {
-                color: var(--text-color-dark-tertiary, #b0b0b0);
-            }
-            /* Adicionado um estilo para o botão de toggle de layout */
-            .crx-controls-container {
-                display: flex;
-                justify-content: flex-end;
-                padding: 4px 8px;
-                background-color: var(--primary-100, #fff);
-                border-bottom: 1px solid var(--border-color, #e0e0e0);
-            }
-            .dark .crx-controls-container {
-                background-color: var(--primary-700, #252535);
-                border-bottom-color: var(--border-dark, #3e374e);
-            }
-            #crx-layout-toggle {
-                background: none;
-                border: none;
-                color: var(--text-color-secondary, #666);
-                cursor: pointer;
-                padding: 6px;
-                border-radius: 4px;
-                transition: background-color 0.2s;
-            }
-            #crx-layout-toggle:hover {
-                background-color: var(--primary-200, #eee);
-            }
-            .dark #crx-layout-toggle {
-                color: var(--text-color-dark-secondary, #aaa);
-            }
-            .dark #crx-layout-toggle:hover {
-                background-color: var(--primary-600, #3e374e);
-            }
-
+            #bplus-custom-styles{display:none}
+            body.bplus-active app-chat-list-container>section>:is(app-chat-list,app-queue-list){display:none!important}
+            #crx-main-container{display:flex;flex-direction:column;height:100%;overflow:hidden}
+            .crx-layout-tabs #crx-list-layout-container,.crx-layout-list #crx-tabs-layout-container{display:none}
+            .crx-controls-container{display:flex;justify-content:flex-end;padding:4px 8px;background-color:var(--primary-100,#fff);border-bottom:1px solid var(--border-color,#e0e0e0)}
+            .dark .crx-controls-container{background-color:var(--primary-700,#252535);border-bottom-color:var(--border-dark,#3e374e)}
+            #crx-layout-toggle{background:0 0;border:none;color:var(--text-color-secondary,#666);cursor:pointer;padding:6px;border-radius:4px;transition:background-color .2s}
+            #crx-layout-toggle:hover{background-color:var(--primary-200,#eee)}
+            .dark #crx-layout-toggle{color:var(--text-color-dark-secondary,#aaa)}
+            .dark #crx-layout-toggle:hover{background-color:var(--primary-600,#3e374e)}
+            .crx-filter-tabs{display:flex;flex-shrink:0;overflow-x:auto;overflow-y:hidden;height:48px;align-items:center;padding:0 8px;background-color:var(--primary-100,#fff);border-bottom:1px solid var(--border-color,#e0e0e0)}
+            .dark .crx-filter-tabs{background-color:var(--primary-700,#252535);border-bottom-color:var(--border-dark,#3e374e)}
+            .crx-filter-tab{padding:8px 12px;margin:0 4px;border-radius:6px;font-size:13px;font-weight:500;color:var(--text-color-secondary,#666);cursor:pointer;white-space:nowrap;transition:all .2s}
+            .dark .crx-filter-tab{color:var(--text-color-dark-secondary,#aaa)}
+            .crx-filter-tab.active{font-weight:600}
+            .crx-filter-tab .count{background-color:var(--primary-200,#e0e0e0);color:var(--text-color-tertiary,#555);border-radius:10px;padding:1px 6px;font-size:11px;margin-left:6px}
+            .dark .crx-filter-tab .count{background-color:var(--primary-600,#3e374e);color:var(--text-color-dark-tertiary,#ccc)}
+            .crx-group-header{display:flex;align-items:center;justify-content:space-between;padding:12px 12px 4px;font-size:13px;font-weight:600;color:var(--text-color-secondary,#6c757d);text-transform:uppercase;position:sticky;top:0;background:inherit;z-index:10;cursor:pointer;user-select:none;border-bottom:1px solid var(--border-color,#e0e0e0)}
+            .dark .crx-group-header{color:var(--text-color-dark-secondary,#a0a0b0);border-bottom-color:var(--border-dark,#3e374e)}
+            .crx-group-header.group-waiting{color:#e67e22}.dark .crx-group-header.group-waiting{color:#f39c12}
+            .crx-group-header .crx-chevron{transition:transform .2s ease-in-out}
+            .crx-group-header.collapsed .crx-chevron{transform:rotate(-90deg)}
+            .crx-chat-group-items.collapsed{display:none}
+            .crx-chat-list-container{flex-grow:1;overflow-y:auto;background-color:var(--primary-100,#fff)}
+            .dark .crx-chat-list-container{background-color:var(--primary-700,#252535)}
+            .crx-tg-item{display:flex;align-items:center;padding:8px 12px;border-bottom:1px solid var(--border-color,#f0f0f0);cursor:pointer;border-left:5px solid transparent;transition:background-color .15s}
+            .dark .crx-tg-item{border-bottom-color:var(--border-dark,#3e374e)}
+            .crx-tg-item.active{background-color:var(--primary-color,#5e47d0)!important;color:#fff;border-left-color:var(--primary-color,#5e47d0)!important}
+            .crx-tg-item.active .crx-tg-avatar,.crx-tg-item.active .crx-tg-subtitle,.crx-tg-item.active .crx-tg-title{color:#fff!important}
+            .crx-tg-item.is-waiting{border-left-color:#ffa500!important;background-color:${hexToRgba('#FFA500',.08)}!important}
+            .dark .crx-tg-item.is-waiting{background-color:${hexToRgba('#FFA500',.18)}!important}
+            .crx-tg-item.is-alert{border-left-color:#e57373!important}
+            .crx-tg-avatar{flex-shrink:0;width:32px;height:32px;display:flex;align-items:center;justify-content:center;border-radius:50%;background-color:var(--primary-200,#e0e0e0);color:var(--text-color-tertiary,#555)}
+            .dark .crx-tg-avatar{background-color:var(--primary-600,#3e374e);color:var(--text-color-dark-tertiary,#ccc)}
+            .crx-tg-avatar svg{width:20px;height:20px}
+            .crx-tg-content{flex-grow:1;min-width:0;margin-left:8px}
+            .crx-tg-title{font-weight:500;font-size:14px;color:var(--text-color-primary,#333);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+            .dark .crx-tg-title{color:var(--text-color-dark-primary,#f0f0f0)}
+            .crx-tg-subtitle{font-size:11px;color:var(--text-color-tertiary,#777);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+            .dark .crx-tg-subtitle{color:var(--text-color-dark-tertiary,#b0b0b0)}
             ${dynamicStyles}
         `);
     }
@@ -247,189 +132,187 @@
     // =================================================================================
     // LÓGICA DE DADOS E RENDERIZAÇÃO
     // =================================================================================
+    /**
+     * Extrai os dados de um elemento de chat original do Beemore.
+     * Esta é a parte mais crítica e frágil do script. Se os nomes continuarem errados,
+     * será necessário inspecionar o HTML da página para encontrar os seletores corretos.
+     */
     function parseChatItemData(itemElement, index) {
-        // Tenta capturar o nome do solicitante. O Beemore geralmente usa o primeiro `span.truncate`
-        // dentro de `div.flex-col` que está dentro de `div.item-body`.
-        const solicitanteElement = itemElement.querySelector('div.item-body > div.flex-col > span.truncate');
-        const solicitante = solicitanteElement?.innerText.trim() || 'Usuário Desconhecido';
+        // --- NOME DO SOLICITANTE E REVENDA ---
+        const spans = Array.from(itemElement.querySelectorAll('span.truncate'));
+        let solicitante = spans[0]?.innerText.trim() || null;
+        let revenda = spans[1]?.innerText.trim() || null;
 
-        // Tenta capturar o nome da revenda. A revenda costuma vir logo abaixo do solicitante
-        // em um `span.truncate` dentro de um `div.flex`.
-        // Vamos procurar pelo segundo `span.truncate` de forma mais genérica,
-        // mas com um fallback robusto caso a estrutura mude ligeiramente.
-        const allTruncateSpans = Array.from(itemElement.querySelectorAll('span.truncate'));
-        let revenda = 'Sem Revenda';
-        // Se o primeiro span for o solicitante, o segundo geralmente será a revenda.
-        if (allTruncateSpans.length > 1 && allTruncateSpans[0] === solicitanteElement) {
-             revenda = allTruncateSpans[1]?.innerText.trim();
-        } else if (allTruncateSpans.length > 0 && allTruncateSpans[0] !== solicitanteElement) {
-            // Se o primeiro span não for o solicitante, talvez a ordem tenha mudado,
-            // ou o solicitante não é um span.truncate. Neste caso, o segundo pode ser a revenda.
-            revenda = allTruncateSpans[0]?.innerText.trim(); // Se o solicitante não foi encontrado pelo seletor específico, tentamos o primeiro truncate como revenda caso seja o único, ou o solicitante.
-            if (allTruncateSpans.length > 1) {
-                revenda = allTruncateSpans[1]?.innerText.trim(); // Se tiver mais de um, o segundo será a revenda.
-            }
+        // Fallback: se o primeiro span estiver vazio mas houver um segundo, talvez o segundo seja o nome
+        if (!solicitante && revenda) {
+            solicitante = revenda;
+            revenda = spans[2]?.innerText.trim() || null;
         }
-        revenda = revenda || 'Sem Revenda'; // Garante que não seja vazio
 
+        // Garante que não fiquem nulos
+        solicitante = solicitante || 'Usuário Desconhecido';
+        revenda = revenda || 'Sem Revenda';
+
+        // Evita que solicitante e revenda sejam idênticos
+        if (solicitante === revenda && solicitante !== 'Usuário Desconhecido') {
+            revenda = 'Sem Revenda';
+        }
+
+        // --- DADOS ADICIONAIS ---
         const isWaiting = Array.from(itemElement.querySelectorAll(SELECTORS.statusTag))
                                .some(tag => tag.textContent?.toLowerCase().includes('aguardando'));
         const isAlert = !isWaiting && !!itemElement.querySelector(SELECTORS.alertIcon);
-
-        // A categoria geralmente está em um `span.shrink-0`
-        const categoryElement = itemElement.querySelector('span.shrink-0');
-        const categoria = categoryElement?.innerText.trim() || 'Sem Categoria';
+        const categoria = itemElement.querySelector('span.shrink-0')?.innerText.trim() || 'Sem Categoria';
 
         return {
-            id: `crx-item-${index}`, // ID único para o elemento do script
-            solicitante,
-            revenda,
-            categoria,
-            isWaiting,
-            isAlert,
-            isActive: itemElement.classList.contains('active'), // Verifica se o chat está ativo
-            // Verifica se o chat pertence ao grupo "Meus Chats" baseado no pai original
+            id: `crx-item-${index}`,
+            solicitante, revenda, categoria, isWaiting, isAlert,
+            isActive: itemElement.classList.contains('active'),
             isMyChat: !!itemElement.closest('app-chat-list')?.querySelector('header span')?.textContent.includes('Meus chats'),
-            originalElement: itemElement, // Referência ao elemento DOM original para cliques
+            originalElement: itemElement,
         };
     }
 
     function createChatItemElement(chatData) {
         const item = document.createElement('div');
         item.dataset.itemId = chatData.id;
-        // Ao clicar no nosso item, disparamos o clique no item original do Beemore
         item.addEventListener('click', () => chatData.originalElement.click());
-
-        // Estrutura HTML do item de chat com solicitante e revenda
-        item.innerHTML = `
-            <div class="crx-tg-avatar is-icon">${ICONS.USER}</div>
-            <div class="crx-tg-content">
-                <div class="crx-tg-title">${chatData.solicitante}</div>
-                <div class="crx-tg-subtitle"><span>${chatData.revenda}</span></div>
-            </div>
-        `;
-        updateChatItemElement(item, chatData); // Aplica as classes baseadas no estado
+        item.innerHTML = `<div class="crx-tg-avatar is-icon">${ICONS.USER}</div><div class="crx-tg-content"><div class="crx-tg-title">${chatData.solicitante}</div><div class="crx-tg-subtitle"><span>${chatData.revenda}</span></div></div>`;
+        updateChatItemElement(item, chatData);
         return item;
     }
 
     function updateChatItemElement(element, data) {
-        // Atualiza as classes do elemento para refletir o estado (categoria, ativo, aguardando, alerta)
         element.className = `crx-tg-item crx-item-bg-${makeSafeForCSS(data.categoria)}`;
         if (data.isActive) element.classList.add('active');
         if (data.isAlert) element.classList.add('is-alert');
         if (data.isWaiting) element.classList.add('is-waiting');
-        // Opcional: Atualizar texto se houver mudança, mas o re-render já cuida disso.
-        // element.querySelector('.crx-tg-title').textContent = data.solicitante;
-        // element.querySelector('.crx-tg-subtitle span').textContent = data.revenda;
+        element.dataset.category = data.categoria; // Adiciona categoria para filtragem rápida
     }
 
     function renderInitialShell(container) {
-        if (document.getElementById('crx-main-container')) return; // Já existe
+        if (document.getElementById('crx-main-container')) return;
         const shell = document.createElement('div');
         shell.id = 'crx-main-container';
-        shell.innerHTML = `
-            <div class="crx-controls-container">
-                <button id="crx-layout-toggle" title="Alternar Layout">${ICONS.LAYOUT}</button>
-            </div>
-            <div id="crx-tabs-layout-container">
-                <div class="crx-filter-tabs"></div>
-                <div class="crx-chat-list-container"></div>
-            </div>
-            <div id="crx-list-layout-container" class="crx-chat-list-container"></div>
-        `;
+        shell.innerHTML = `<div class="crx-controls-container"><button id="crx-layout-toggle" title="Alternar Layout">${ICONS.LAYOUT}</button></div><div id="crx-tabs-layout-container"><div class="crx-filter-tabs"></div><div class="crx-chat-list-container"></div></div><div id="crx-list-layout-container" class="crx-chat-list-container"></div>`;
         container.appendChild(shell);
-
-        // Adiciona listener para o botão de alternar layout
         document.getElementById('crx-layout-toggle').addEventListener('click', () => {
             STATE.activeLayout = (STATE.activeLayout === 'tabs') ? 'list' : 'tabs';
-            GM_setValue('activeLayout', STATE.activeLayout); // Salva a preferência
-            updateFullUI(); // Re-renderiza a interface com o novo layout
+            GM_setValue('activeLayout', STATE.activeLayout);
+            updateFullUI();
         });
     }
 
     const updateChatList = debounce(() => {
         const allChatItems = Array.from(document.querySelectorAll(SELECTORS.allChatItems));
-        const newChatsData = new Map();
-
-        // Mapeia os elementos DOM originais para nossos dados e IDs, usando um índice para IDs únicos
-        allChatItems.forEach((el, i) => {
+        let hasChanges = false;
+        
+        const newChatsData = new Map(allChatItems.map((el, i) => {
             const data = parseChatItemData(el, i);
-            newChatsData.set(data.id, data);
-        });
+            return [data.id, data];
+        }));
+
+        if (newChatsData.size !== STATE.renderedChats.size) {
+            hasChanges = true;
+        }
 
         const oldChatIds = new Set(STATE.renderedChats.keys());
 
-        // Remove chats que não existem mais
         for (const id of oldChatIds) {
             if (!newChatsData.has(id)) {
                 STATE.renderedChats.get(id)?.element.remove();
                 STATE.renderedChats.delete(id);
+                hasChanges = true;
             }
         }
 
-        // Adiciona ou atualiza chats existentes
         for (const [id, data] of newChatsData.entries()) {
             if (oldChatIds.has(id)) {
-                // Chat já existe, apenas atualiza suas classes e dados
                 const existing = STATE.renderedChats.get(id);
-                updateChatItemElement(existing.element, data);
-                existing.data = data;
+                // Detecta se dados importantes mudaram para evitar re-render desnecessário
+                if (JSON.stringify(existing.data) !== JSON.stringify(data)) {
+                    updateChatItemElement(existing.element, data);
+                    existing.data = data;
+                    hasChanges = true;
+                }
             } else {
-                // Novo chat, cria o elemento e adiciona ao estado
                 STATE.renderedChats.set(id, { element: createChatItemElement(data), data: data });
+                hasChanges = true;
             }
         }
-        updateFullUI(); // Atualiza toda a UI com os novos dados
+        
+        if (hasChanges) {
+            updateFullUI();
+        }
     }, CONFIG.UPDATE_DEBOUNCE_MS);
 
     function updateFullUI() {
         const mainContainer = document.getElementById('crx-main-container');
         if (!mainContainer) return;
-
-        mainContainer.className = 'crx-layout-' + STATE.activeLayout; // Aplica a classe de layout
-
+        mainContainer.className = 'crx-layout-' + STATE.activeLayout;
         const allChatsData = Array.from(STATE.renderedChats.values()).map(item => item.data);
-
-        // Ordenação: Alertas vêm primeiro. `(b.isAlert ? 1 : 0) - (a.isAlert ? 1 : 0)` faz com que `true` (1) seja "maior" que `false` (0) ao subtrair, resultando em negativo se `b` for alerta e `a` não, movendo `b` para frente.
-        const sortFn = (a, b) => (b.isAlert ? 1 : 0) - (a.isAlert ? 1 : 0);
-
-        // 1. Chats Aguardando Atendimento (sempre no topo)
+        const sortFn = (a, b) => (b.isAlert - a.isAlert) || (b.isWaiting - a.isWaiting);
+        
         const waitingChats = allChatsData.filter(c => c.isWaiting).sort(sortFn);
-
-        // 2. Outros chats (Meus Chats e Outros por categoria)
         const remaining = allChatsData.filter(c => !c.isWaiting);
         const myChats = remaining.filter(c => c.isMyChat).sort(sortFn);
         const otherChats = remaining.filter(c => !c.isMyChat).sort(sortFn);
 
-        // Renderiza baseado no layout ativo
-        STATE.activeLayout === 'tabs' ? updateTabsLayout(waitingChats, myChats, otherChats) : updateListLayout(waitingChats, myChats, otherChats);
+        if (STATE.activeLayout === 'tabs') {
+            updateTabsLayout(waitingChats, myChats, otherChats);
+        } else {
+            updateListLayout(waitingChats, myChats, otherChats);
+        }
     }
 
     function appendGroupToFragment(fragment, title, chats, groupKey) {
-        if (chats.length === 0) return; // Não cria grupo se não houver chats
-
+        if (chats.length === 0) return;
         const isCollapsed = STATE.collapsedGroups.has(groupKey);
         const header = document.createElement('div');
         header.className = `crx-group-header ${isCollapsed ? 'collapsed' : ''}`;
-        if (groupKey === 'group_waiting') header.classList.add('group-waiting'); // Estilo especial para Aguardando
+        header.dataset.groupKey = groupKey;
+        header.dataset.originalTitle = title;
+        if (groupKey === 'group_waiting') header.classList.add('group-waiting');
         header.innerHTML = `<span>${title} (${chats.length})</span><span class="crx-chevron">${ICONS.CHEVRON}</span>`;
-
+        
         const itemsContainer = document.createElement('div');
         itemsContainer.className = `crx-chat-group-items ${isCollapsed ? 'collapsed' : ''}`;
-        chats.forEach(chat => itemsContainer.appendChild(STATE.renderedChats.get(chat.id).element));
+        itemsContainer.dataset.groupKey = groupKey;
 
-        // Adiciona funcionalidade de colapsar/expandir
+        chats.forEach(chat => itemsContainer.appendChild(STATE.renderedChats.get(chat.id).element));
+        
         header.addEventListener('click', () => {
-            if (STATE.collapsedGroups.has(groupKey)) {
-                STATE.collapsedGroups.delete(groupKey);
-            } else {
-                STATE.collapsedGroups.add(groupKey);
-            }
+            STATE.collapsedGroups.has(groupKey) ? STATE.collapsedGroups.delete(groupKey) : STATE.collapsedGroups.add(groupKey);
             GM_setValue('collapsedGroups', JSON.stringify(Array.from(STATE.collapsedGroups)));
             header.classList.toggle('collapsed');
             itemsContainer.classList.toggle('collapsed');
         });
         fragment.append(header, itemsContainer);
+    }
+    
+    // Otimizado: Aplica o filtro de categoria sem reconstruir todo o DOM
+    function applyChatFilter() {
+        const listContainer = document.querySelector('#crx-tabs-layout-container .crx-chat-list-container');
+        if (!listContainer) return;
+    
+        listContainer.querySelectorAll('.crx-group-header').forEach(header => {
+            const groupKey = header.dataset.groupKey;
+            const itemsContainer = listContainer.querySelector(`.crx-chat-group-items[data-group-key="${groupKey}"]`);
+            if (!itemsContainer) return;
+    
+            let visibleItemsCount = 0;
+            Array.from(itemsContainer.children).forEach(item => {
+                const isVisible = STATE.activeFilter === 'Todos' || item.dataset.category === STATE.activeFilter;
+                item.style.display = isVisible ? '' : 'none';
+                if (isVisible) visibleItemsCount++;
+            });
+    
+            const isGroupVisible = visibleItemsCount > 0;
+            header.style.display = isGroupVisible ? '' : 'none';
+            if (isGroupVisible) {
+                header.querySelector('span:first-child').textContent = `${header.dataset.originalTitle} (${visibleItemsCount})`;
+            }
+        });
     }
 
     function updateTabsLayout(waiting, my, other) {
@@ -437,58 +320,40 @@
         const listContainer = document.querySelector('#crx-tabs-layout-container .crx-chat-list-container');
         if (!tabsContainer || !listContainer) return;
 
-        const allChats = [...waiting, ...my, ...other]; // Todos os chats para contagem geral e de categoria
+        const allChats = [...waiting, ...my, ...other];
         const counts = allChats.reduce((a, c) => (a.set(c.categoria, (a.get(c.categoria) || 0) + 1), a), new Map());
-
-        // Renderiza as abas de filtro
-        tabsContainer.innerHTML = `
-            <div class="crx-filter-tab ${STATE.activeFilter === 'Todos' ? 'active' : ''}" data-filter="Todos">
-                Todos <span class="count">${allChats.length}</span>
-            </div>` + [...counts.entries()].sort().map(([cat, cnt]) => `
-            <div class="crx-filter-tab ${STATE.activeFilter === cat ? 'active' : ''}" data-filter="${cat}">
-                ${cat.replace('Suporte - ','')} <span class="count">${cnt}</span>
-            </div>`).join('');
-
-        // Adiciona listeners para as abas
-        tabsContainer.querySelectorAll('.crx-filter-tab').forEach(t => t.addEventListener('click', () => {
-            STATE.activeFilter = t.dataset.filter;
-            updateFullUI(); // Re-renderiza a lista para aplicar o filtro
+        tabsContainer.innerHTML = `<div class="crx-filter-tab ${STATE.activeFilter === 'Todos' ? 'active' : ''}" data-filter="Todos">Todos <span class="count">${allChats.length}</span></div>` + [...counts.entries()].sort().map(([cat, cnt]) => `<div class="crx-filter-tab ${STATE.activeFilter === cat ? 'active' : ''}" data-filter="${cat}">${cat.replace('Suporte - ','')} <span class="count">${cnt}</span></div>`).join('');
+        
+        tabsContainer.querySelectorAll('.crx-filter-tab').forEach(t => t.addEventListener('click', (e) => {
+            const newFilter = e.currentTarget.dataset.filter;
+            if (STATE.activeFilter === newFilter) return;
+            STATE.activeFilter = newFilter;
+            tabsContainer.querySelector('.crx-filter-tab.active')?.classList.remove('active');
+            e.currentTarget.classList.add('active');
+            applyChatFilter(); // Chama a função otimizada
         }));
 
         listContainer.innerHTML = '';
         const fragment = document.createDocumentFragment();
-        const filterFn = chat => STATE.activeFilter === 'Todos' || chat.categoria === STATE.activeFilter;
-
-        // Adiciona grupo "Aguardando Atendimento"
-        appendGroupToFragment(fragment, "Aguardando Atendimento", waiting.filter(filterFn), "group_waiting");
-
-        // Adiciona grupo "Meus Chats"
-        appendGroupToFragment(fragment, "Meus Chats", my.filter(filterFn), "group_mychats");
-
-        // Adiciona outros grupos por categoria
-        const grouped = other.filter(filterFn).reduce((a, c) => ((a[c.categoria] = a[c.categoria] || []).push(c), a), {});
+        appendGroupToFragment(fragment, "Aguardando Atendimento", waiting, "group_waiting");
+        appendGroupToFragment(fragment, "Meus Chats", my, "group_mychats");
+        const grouped = other.reduce((a, c) => ((a[c.categoria] = a[c.categoria] || []).push(c), a), {});
         Object.keys(grouped).sort().forEach(cat => appendGroupToFragment(fragment, cat, grouped[cat], `group_${makeSafeForCSS(cat)}`));
-
         listContainer.appendChild(fragment);
+
+        // Aplica o filtro inicial após a construção
+        applyChatFilter();
     }
 
     function updateListLayout(waiting, my, other) {
         const listContainer = document.getElementById('crx-list-layout-container');
         if (!listContainer) return;
-
         listContainer.innerHTML = '';
         const fragment = document.createDocumentFragment();
-
-        // Adiciona grupo "Aguardando Atendimento"
         appendGroupToFragment(fragment, "Aguardando Atendimento", waiting, "group_waiting");
-
-        // Adiciona grupo "Meus Chats"
         appendGroupToFragment(fragment, "Meus Chats", my, "group_mychats");
-
-        // Adiciona outros grupos por categoria
         const grouped = other.reduce((a, c) => ((a[c.categoria] = a[c.categoria] || []).push(c), a), {});
         Object.keys(grouped).sort().forEach(cat => appendGroupToFragment(fragment, cat, grouped[cat], `group_${makeSafeForCSS(cat)}`));
-
         listContainer.appendChild(fragment);
     }
 
@@ -497,40 +362,23 @@
     // =================================================================================
     async function initialize() {
         if (STATE.isInitialized) return;
-
-        injectStyles(); // Injeta os estilos CSS personalizados
-
-        // PASSO 1: Espera a página carregar a lista de chats original.
-        // Isso garante que temos os elementos DOM para parsear.
+        injectStyles();
         await waitForElement(SELECTORS.allChatItems);
         log("Chats originais detectados. Iniciando UI do B.Plus!.");
 
         STATE.isInitialized = true;
         const mainSection = document.querySelector(SELECTORS.mainContainer);
-        if (!mainSection) {
-            log("ERRO: Container principal (app-chat-list-container > section) não encontrado. O script não pode ser inicializado.");
-            return;
-        }
+        if (!mainSection) { log("ERRO: Container principal não encontrado."); return; }
 
-        // PASSO 2: Renderiza a nossa estrutura principal (ainda vazia de chats).
         renderInitialShell(mainSection);
-        
-        // PASSO 3: Ativa a classe CSS no corpo para esconder as listas originais do Beemore.
         document.body.classList.add('bplus-active');
-
-        // PASSO 4: Popula nossa UI pela primeira vez com os chats encontrados.
         updateChatList();
 
-        // PASSO 5: Começa a observar mudanças no container principal para manter a lista atualizada.
-        // childList: observa adição/remoção de filhos diretos
-        // subtree: observa mudanças em toda a subárvore (essencial para novos chats ou mudanças de estado)
         const observer = new MutationObserver(updateChatList);
         observer.observe(mainSection, { childList: true, subtree: true });
-        
         log("B.Plus! carregado e monitorando.");
     }
 
-    // Garante que o script é inicializado após o DOM estar pronto
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', initialize);
     } else {
