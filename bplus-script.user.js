@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         B.PLUS
 // @namespace    http://tampermonkey.net/
-// @version      16 // Adiciona bolha de notificação (não lido) e ícone de serviço incorreto.
-// @description  Renderização otimizada de chats com notificação de não lido e alerta de serviço incorreto.
+// @version      16.0.1 // Correção crítica de clique: Garante que o chat correto seja aberto.
+// @description  Renderização otimizada de chats com correção de referência de clique para garantir a abertura correta da conversa.
 // @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
 // @grant        GM_addStyle
@@ -16,7 +16,7 @@
 
     // --- CONFIGURAÇÕES GERAIS ---
     const CONFIG = {
-        SCRIPT_VERSION: GM_info.script.version || '15.0.4',
+        SCRIPT_VERSION: GM_info.script.version || '15.0.5',
         UPDATE_DEBOUNCE_MS: 300,
     };
 
@@ -44,7 +44,7 @@
         activeFilter: 'Todos',
         activeLayout: GM_getValue('activeLayout', 'tabs'),
         collapsedGroups: new Set(JSON.parse(GM_getValue('collapsedGroups', '[]'))),
-        renderedChats: new Map(),
+        renderedChats: new Map(), // MUDANÇA CRÍTICA: A chave agora será o HTMLElement original, não um ID de string.
         isInitialized: false,
     };
 
@@ -71,9 +71,9 @@
     });
 
     // =================================================================================
-    // INJEÇÃO DE ESTILOS
+    // INJEÇÃO DE ESTILOS (Adicionado o CSS da versão 15.0.4)
     // =================================================================================
-    function injectStyles() {
+     function injectStyles() {
         if (document.getElementById('bplus-custom-styles')) return;
         const CATEGORY_COLORS = {
             'Suporte - Web': '#3498db', 'Suporte - PDV': '#2ecc71', 'Suporte - Retaguarda': '#f39c12',
@@ -113,7 +113,7 @@
             .crx-chat-group-items.collapsed{display:none}
             .crx-chat-list-container{flex-grow:1;overflow-y:auto;background-color:var(--primary-100,#fff)}
             .dark .crx-chat-list-container{background-color:var(--primary-700,#252535)}
-            .crx-tg-item{display:flex;align-items:center;padding:8px 12px;border-bottom:1px solid var(--border-color,#f0f0f0);cursor:pointer;border-left:5px solid transparent;transition:background-color .15s}
+            .crx-tg-item{position: relative; display:flex;align-items:center;padding:8px 12px;border-bottom:1px solid var(--border-color,#f0f0f0);cursor:pointer;border-left:5px solid transparent;transition:background-color .15s}
             .dark .crx-tg-item{border-bottom-color:var(--border-dark,#3e374e)}
             .crx-tg-item.active{background-color:var(--primary-color,#5e47d0)!important;color:#fff;border-left-color:var(--primary-color,#5e47d0)!important}
             .crx-tg-item.active .crx-tg-avatar,.crx-tg-item.active .crx-tg-subtitle,.crx-tg-item.active .crx-tg-title{color:#fff!important}
@@ -129,7 +129,7 @@
             .crx-tg-subtitle{display:flex;align-items:center;font-size:11px;color:var(--text-color-tertiary,#777);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
             .dark .crx-tg-subtitle{color:var(--text-color-dark-tertiary,#b0b0b0)}
             .crx-tg-subtitle > span:first-child { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-            .crx-tg-meta { display: flex; flex-direction: column; align-items: flex-end; justify-content: center; margin-left: 8px; flex-shrink: 0; }
+            .crx-tg-meta { display: flex; flex-direction: column; align-items: flex-end; justify-content: flex-start; margin-left: 8px; flex-shrink: 0; height: 100%; padding-top: 2px;}
             .crx-unread-badge { display: none; background-color: #ef4444; color: white; font-size: 10px; font-weight: 600; border-radius: 9999px; min-width: 18px; height: 18px; padding: 2px 5px; text-align: center; line-height: 14px; }
             .crx-service-warning-icon { display: none; align-items: center; justify-content: center; color: #f59e0b; margin-left: 4px; flex-shrink: 0; cursor: pointer; }
             .crx-service-warning-icon svg { width: 14px; height: 14px; }
@@ -140,7 +140,7 @@
     // =================================================================================
     // LÓGICA DE DADOS E RENDERIZAÇÃO
     // =================================================================================
-    function parseChatItemData(itemElement, index) {
+    function parseChatItemData(itemElement) {
         let solicitante = 'Usuário Desconhecido';
         let revenda = 'Sem Revenda';
         let categoria = 'Sem Categoria';
@@ -157,10 +157,8 @@
                 const tempRevendaText = revendaElement.innerText.trim();
                 const waitingTextMatch = tempRevendaText.match(/Aguardando(\s\(.*\))?/);
                 let cleanedRevendaText = tempRevendaText;
-                if (waitingTextMatch) {
-                    cleanedRevendaText = tempRevendaText.replace(waitingTextMatch[0], '').trim();
-                }
-                if (cleanedRevendaText) { revenda = cleanedRevendaText; }
+                if (waitingTextMatch) cleanedRevendaText = tempRevendaText.replace(waitingTextMatch[0], '').trim();
+                if (cleanedRevendaText) revenda = cleanedRevendaText;
             }
         }
 
@@ -173,27 +171,25 @@
 
         const isWaiting = Array.from(itemElement.querySelectorAll('app-tag')).some(tag => tag.textContent?.toLowerCase().includes('aguardando'));
         const isAlert = !isWaiting && !!itemElement.querySelector(SELECTORS.alertIcon);
-        const isActive = itemElement.classList.contains('active');
-        const isMyChat = !!itemElement.closest('app-chat-list')?.querySelector('header span')?.textContent.includes('Meus chats');
 
         return {
-            id: `crx-item-${index}`,
             solicitante, revenda, categoria, isWaiting, isAlert,
             unreadCount, hasServiceWarning, originalServiceWarningButton,
-            isActive, isMyChat, originalElement: itemElement,
+            isActive: itemElement.classList.contains('active'),
+            isMyChat: !!itemElement.closest('app-chat-list')?.querySelector('header span')?.textContent.includes('Meus chats'),
+            originalElement: itemElement, // A referência direta é crucial
         };
     }
 
     function createChatItemElement(chatData) {
         const item = document.createElement('div');
-        item.dataset.itemId = chatData.id;
         item.addEventListener('click', () => chatData.originalElement.click());
         item.innerHTML = `
             <div class="crx-tg-avatar is-icon">${ICONS.USER}</div>
             <div class="crx-tg-content">
-                <div class="crx-tg-title">${chatData.solicitante}</div>
+                <div class="crx-tg-title"></div>
                 <div class="crx-tg-subtitle">
-                    <span>${chatData.revenda}</span>
+                    <span></span>
                     <span class="crx-service-warning-icon" title="Serviço incorreto"></span>
                 </div>
             </div>
@@ -213,7 +209,7 @@
         element.dataset.category = data.categoria;
         
         element.querySelector('.crx-tg-title').textContent = data.solicitante;
-        element.querySelector('.crx-tg-subtitle span:first-child').textContent = data.revenda;
+        element.querySelector('.crx-tg-subtitle > span:first-child').textContent = data.revenda;
 
         const unreadBadge = element.querySelector('.crx-unread-badge');
         if (data.unreadCount > 0) {
@@ -229,7 +225,6 @@
             warningIcon.style.display = 'inline-flex';
             warningIcon.onclick = (e) => {
                 e.stopPropagation();
-                log('Clicando no botão original de serviço incorreto.');
                 data.originalServiceWarningButton.click();
             };
         } else {
@@ -252,39 +247,34 @@
     }
 
     const updateChatList = debounce(() => {
-        const allChatItems = Array.from(document.querySelectorAll(SELECTORS.allChatItems));
+        const allOriginalItems = Array.from(document.querySelectorAll(SELECTORS.allChatItems));
+        const currentElements = new Set(allOriginalItems);
+        const oldElements = new Set(STATE.renderedChats.keys());
         let hasChanges = false;
-        
-        const newChatsMap = new Map();
-        allChatItems.forEach((el, i) => {
-            const data = parseChatItemData(el, i);
-            newChatsMap.set(data.id, data);
-        });
 
-        if (newChatsMap.size !== STATE.renderedChats.size) {
-            hasChanges = true;
-        }
-
-        const oldChatIds = new Set(STATE.renderedChats.keys());
-
-        for (const id of oldChatIds) {
-            if (!newChatsMap.has(id)) {
-                STATE.renderedChats.get(id)?.element.remove();
-                STATE.renderedChats.delete(id);
+        // REMOVER: Itens que estavam no DOM mas não estão mais
+        for (const oldEl of oldElements) {
+            if (!currentElements.has(oldEl)) {
+                STATE.renderedChats.get(oldEl)?.element.remove();
+                STATE.renderedChats.delete(oldEl);
                 hasChanges = true;
             }
         }
 
-        for (const [id, data] of newChatsMap.entries()) {
-            const existing = STATE.renderedChats.get(id);
-            if (existing) {
-                if (JSON.stringify(existing.data) !== JSON.stringify(data)) {
-                    updateChatItemElement(existing.element, data);
-                    existing.data = data;
-                    hasChanges = true;
+        // ADICIONAR / ATUALIZAR
+        for (const el of allOriginalItems) {
+            const newData = parseChatItemData(el);
+            const existing = STATE.renderedChats.get(el);
+
+            if (existing) { // Já existe, verificar se precisa atualizar
+                if (JSON.stringify(existing.data) !== JSON.stringify(newData)) {
+                    updateChatItemElement(existing.element, newData);
+                    existing.data = newData;
+                    hasChanges = true; 
                 }
-            } else {
-                STATE.renderedChats.set(id, { element: createChatItemElement(data), data: data });
+            } else { // Novo elemento
+                const newCustomElement = createChatItemElement(newData);
+                STATE.renderedChats.set(el, { element: newCustomElement, data: newData });
                 hasChanges = true;
             }
         }
@@ -297,7 +287,6 @@
     function updateFullUI(forceRebuild = false) {
         const mainContainer = document.getElementById('crx-main-container');
         if (!mainContainer) return;
-
         mainContainer.className = 'crx-layout-' + STATE.activeLayout;
         
         if (forceRebuild) {
@@ -315,9 +304,7 @@
                 updateListLayout(waitingChats, myChats, otherChats);
             }
         } else {
-             if (STATE.activeLayout === 'tabs') {
-                applyChatFilter();
-             }
+             if (STATE.activeLayout === 'tabs') applyChatFilter();
         }
     }
 
@@ -335,7 +322,13 @@
         itemsContainer.className = `crx-chat-group-items ${isCollapsed ? 'collapsed' : ''}`;
         itemsContainer.dataset.groupKey = groupKey;
 
-        chats.forEach(chat => itemsContainer.appendChild(STATE.renderedChats.get(chat.id).element));
+        // LÓGICA DE APPEND ATUALIZADA
+        chats.forEach(chatData => {
+            const renderedItem = STATE.renderedChats.get(chatData.originalElement);
+            if (renderedItem) {
+                itemsContainer.appendChild(renderedItem.element);
+            }
+        });
         
         header.addEventListener('click', () => {
             STATE.collapsedGroups.has(groupKey) ? STATE.collapsedGroups.delete(groupKey) : STATE.collapsedGroups.add(groupKey);
@@ -433,9 +426,5 @@
         log("B.Plus! carregado e monitorando.");
     }
 
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', initialize);
-    } else {
-        initialize();
-    }
+    if (document.readyState === 'loading') { document.addEventListener('DOMContentLoaded', initialize); } else { initialize(); }
 })();
