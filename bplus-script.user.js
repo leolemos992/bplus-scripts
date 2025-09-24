@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         B.PLUS
 // @namespace    http://tampermonkey.net/
-// @version      15.0.2 // Versão atualizada com otimização e melhorias de parsing
-// @description  Renderização otimizada de chats com filtragem rápida e extração de dados mais robusta.
+// @version      15.0.3 // Parsing de dados (nomes) corrigido com base na estrutura real do HTML.
+// @description  Renderização otimizada de chats com filtragem rápida e extração de dados robusta para nomes de solicitante e revenda.
 // @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
 // @grant        GM_addStyle
@@ -16,8 +16,8 @@
 
     // --- CONFIGURAÇÕES GERAIS ---
     const CONFIG = {
-        SCRIPT_VERSION: GM_info.script.version || '15.0.2',
-        UPDATE_DEBOUNCE_MS: 300, // Levemente aumentado para agrupar mais mudanças do DOM
+        SCRIPT_VERSION: GM_info.script.version || '15.0.3',
+        UPDATE_DEBOUNCE_MS: 300,
     };
 
     // --- ÍCONES SVG ---
@@ -68,7 +68,7 @@
     });
 
     // =================================================================================
-    // INJEÇÃO DE ESTILOS (Mesmos estilos da versão anterior, sem alterações)
+    // INJEÇÃO DE ESTILOS (Sem alterações)
     // =================================================================================
     function injectStyles() {
         if (document.getElementById('bplus-custom-styles')) return;
@@ -134,41 +134,54 @@
     // =================================================================================
     /**
      * Extrai os dados de um elemento de chat original do Beemore.
-     * Esta é a parte mais crítica e frágil do script. Se os nomes continuarem errados,
-     * será necessário inspecionar o HTML da página para encontrar os seletores corretos.
+     * Esta função foi reescrita para ser mais robusta, baseada na estrutura HTML fornecida.
      */
     function parseChatItemData(itemElement, index) {
-        // --- NOME DO SOLICITANTE E REVENDA ---
-        const spans = Array.from(itemElement.querySelectorAll('span.truncate'));
-        let solicitante = spans[0]?.innerText.trim() || null;
-        let revenda = spans[1]?.innerText.trim() || null;
+        let solicitante = 'Usuário Desconhecido';
+        let revenda = 'Sem Revenda';
+        let categoria = 'Sem Categoria';
 
-        // Fallback: se o primeiro span estiver vazio mas houver um segundo, talvez o segundo seja o nome
-        if (!solicitante && revenda) {
-            solicitante = revenda;
-            revenda = spans[2]?.innerText.trim() || null;
+        const mainSection = itemElement.querySelector('section');
+
+        if (mainSection) {
+            // O nome do solicitante e a categoria estão consistentemente dentro do primeiro <div> da seção.
+            const topDiv = mainSection.querySelector('div');
+            if (topDiv) {
+                solicitante = topDiv.querySelector('span.font-medium')?.innerText.trim() || solicitante;
+                categoria = topDiv.querySelector('span.shrink-0')?.innerText.trim() || categoria;
+            }
+
+            // A revenda está consistentemente no elemento <span_> que é irmão (`nextElementSibling`) do <div> acima.
+            const revendaElement = topDiv?.nextElementSibling;
+            if (revendaElement && revendaElement.tagName === 'SPAN') {
+                // O texto da revenda pode conter outros textos (como o de 'Aguardando').
+                // Limpamos o texto pegando apenas o conteúdo principal.
+                const tempRevendaText = revendaElement.innerText.trim();
+
+                // Remove o texto de "Aguardando..." se ele for capturado junto.
+                const waitingTextMatch = tempRevendaText.match(/Aguardando(\s\(.*\))?/);
+                let cleanedRevendaText = tempRevendaText;
+                if (waitingTextMatch) {
+                    cleanedRevendaText = tempRevendaText.replace(waitingTextMatch[0], '').trim();
+                }
+
+                if (cleanedRevendaText) {
+                    revenda = cleanedRevendaText;
+                }
+            }
         }
 
-        // Garante que não fiquem nulos
-        solicitante = solicitante || 'Usuário Desconhecido';
-        revenda = revenda || 'Sem Revenda';
-
-        // Evita que solicitante e revenda sejam idênticos
-        if (solicitante === revenda && solicitante !== 'Usuário Desconhecido') {
-            revenda = 'Sem Revenda';
-        }
-
-        // --- DADOS ADICIONAIS ---
-        const isWaiting = Array.from(itemElement.querySelectorAll(SELECTORS.statusTag))
+        // A lógica para 'isWaiting' e outros status continua a mesma e é confiável.
+        const isWaiting = Array.from(itemElement.querySelectorAll('app-tag'))
                                .some(tag => tag.textContent?.toLowerCase().includes('aguardando'));
         const isAlert = !isWaiting && !!itemElement.querySelector(SELECTORS.alertIcon);
-        const categoria = itemElement.querySelector('span.shrink-0')?.innerText.trim() || 'Sem Categoria';
+        const isActive = itemElement.classList.contains('active');
+        const isMyChat = !!itemElement.closest('app-chat-list')?.querySelector('header span')?.textContent.includes('Meus chats');
 
         return {
             id: `crx-item-${index}`,
             solicitante, revenda, categoria, isWaiting, isAlert,
-            isActive: itemElement.classList.contains('active'),
-            isMyChat: !!itemElement.closest('app-chat-list')?.querySelector('header span')?.textContent.includes('Meus chats'),
+            isActive, isMyChat,
             originalElement: itemElement,
         };
     }
@@ -187,7 +200,11 @@
         if (data.isActive) element.classList.add('active');
         if (data.isAlert) element.classList.add('is-alert');
         if (data.isWaiting) element.classList.add('is-waiting');
-        element.dataset.category = data.categoria; // Adiciona categoria para filtragem rápida
+        element.dataset.category = data.categoria;
+        
+        // Atualiza o texto diretamente para evitar recriação de elemento
+        element.querySelector('.crx-tg-title').textContent = data.solicitante;
+        element.querySelector('.crx-tg-subtitle span').textContent = data.revenda;
     }
 
     function renderInitialShell(container) {
@@ -199,7 +216,7 @@
         document.getElementById('crx-layout-toggle').addEventListener('click', () => {
             STATE.activeLayout = (STATE.activeLayout === 'tabs') ? 'list' : 'tabs';
             GM_setValue('activeLayout', STATE.activeLayout);
-            updateFullUI();
+            updateFullUI(true); // Força a re-renderização total ao trocar de layout
         });
     }
 
@@ -207,29 +224,30 @@
         const allChatItems = Array.from(document.querySelectorAll(SELECTORS.allChatItems));
         let hasChanges = false;
         
-        const newChatsData = new Map(allChatItems.map((el, i) => {
+        const newChatsMap = new Map();
+        allChatItems.forEach((el, i) => {
             const data = parseChatItemData(el, i);
-            return [data.id, data];
-        }));
+            newChatsMap.set(data.id, data);
+        });
 
-        if (newChatsData.size !== STATE.renderedChats.size) {
+        if (newChatsMap.size !== STATE.renderedChats.size) {
             hasChanges = true;
         }
 
         const oldChatIds = new Set(STATE.renderedChats.keys());
 
         for (const id of oldChatIds) {
-            if (!newChatsData.has(id)) {
+            if (!newChatsMap.has(id)) {
                 STATE.renderedChats.get(id)?.element.remove();
                 STATE.renderedChats.delete(id);
                 hasChanges = true;
             }
         }
 
-        for (const [id, data] of newChatsData.entries()) {
-            if (oldChatIds.has(id)) {
-                const existing = STATE.renderedChats.get(id);
-                // Detecta se dados importantes mudaram para evitar re-render desnecessário
+        for (const [id, data] of newChatsMap.entries()) {
+            const existing = STATE.renderedChats.get(id);
+            if (existing) {
+                // Compara dados antigos e novos para ver se uma atualização visual é necessária
                 if (JSON.stringify(existing.data) !== JSON.stringify(data)) {
                     updateChatItemElement(existing.element, data);
                     existing.data = data;
@@ -242,26 +260,37 @@
         }
         
         if (hasChanges) {
-            updateFullUI();
+            updateFullUI(true); // Força a reconstrução da lista se houveram mudanças
         }
     }, CONFIG.UPDATE_DEBOUNCE_MS);
 
-    function updateFullUI() {
+    // Adicionado `forceRebuild` para otimizar
+    function updateFullUI(forceRebuild = false) {
         const mainContainer = document.getElementById('crx-main-container');
         if (!mainContainer) return;
-        mainContainer.className = 'crx-layout-' + STATE.activeLayout;
-        const allChatsData = Array.from(STATE.renderedChats.values()).map(item => item.data);
-        const sortFn = (a, b) => (b.isAlert - a.isAlert) || (b.isWaiting - a.isWaiting);
-        
-        const waitingChats = allChatsData.filter(c => c.isWaiting).sort(sortFn);
-        const remaining = allChatsData.filter(c => !c.isWaiting);
-        const myChats = remaining.filter(c => c.isMyChat).sort(sortFn);
-        const otherChats = remaining.filter(c => !c.isMyChat).sort(sortFn);
 
-        if (STATE.activeLayout === 'tabs') {
-            updateTabsLayout(waitingChats, myChats, otherChats);
+        mainContainer.className = 'crx-layout-' + STATE.activeLayout;
+        
+        // Apenas reconstrói a lista se for forçado (mudança de chat, troca de layout)
+        if (forceRebuild) {
+            const allChatsData = Array.from(STATE.renderedChats.values()).map(item => item.data);
+            const sortFn = (a, b) => (b.isAlert - a.isAlert) || (b.isWaiting - a.isWaiting);
+            
+            const waitingChats = allChatsData.filter(c => c.isWaiting).sort(sortFn);
+            const remaining = allChatsData.filter(c => !c.isWaiting);
+            const myChats = remaining.filter(c => c.isMyChat).sort(sortFn);
+            const otherChats = remaining.filter(c => !c.isMyChat).sort(sortFn);
+    
+            if (STATE.activeLayout === 'tabs') {
+                updateTabsLayout(waitingChats, myChats, otherChats);
+            } else {
+                updateListLayout(waitingChats, myChats, otherChats);
+            }
         } else {
-            updateListLayout(waitingChats, myChats, otherChats);
+            // Se não for forçado, apenas aplica o filtro (muito mais rápido)
+             if (STATE.activeLayout === 'tabs') {
+                applyChatFilter();
+             }
         }
     }
 
@@ -290,7 +319,6 @@
         fragment.append(header, itemsContainer);
     }
     
-    // Otimizado: Aplica o filtro de categoria sem reconstruir todo o DOM
     function applyChatFilter() {
         const listContainer = document.querySelector('#crx-tabs-layout-container .crx-chat-list-container');
         if (!listContainer) return;
@@ -330,7 +358,7 @@
             STATE.activeFilter = newFilter;
             tabsContainer.querySelector('.crx-filter-tab.active')?.classList.remove('active');
             e.currentTarget.classList.add('active');
-            applyChatFilter(); // Chama a função otimizada
+            updateFullUI(false); // Apenas aplica o filtro, não reconstrói
         }));
 
         listContainer.innerHTML = '';
@@ -341,7 +369,6 @@
         Object.keys(grouped).sort().forEach(cat => appendGroupToFragment(fragment, cat, grouped[cat], `group_${makeSafeForCSS(cat)}`));
         listContainer.appendChild(fragment);
 
-        // Aplica o filtro inicial após a construção
         applyChatFilter();
     }
 
