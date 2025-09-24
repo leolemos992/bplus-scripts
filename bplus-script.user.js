@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         B.Plus! - Otimizado v2 (com Grupos Recolhíveis)
+// @name         B.Plus! - Otimizado v2.1 (Correção Visual)
 // @namespace    http://tampermonkey.net/
-// @version      14.0.0
-// @description  Renderização inteligente, grupos recolhíveis, separador para chats "Aguardando" e correções de UI.
+// @version      14.1.0
+// @description  Corrige a visualização de chats quebrada, mantendo os grupos recolhíveis e o separador para "Aguardando".
 // @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
 // @grant        GM_xmlhttpRequest
@@ -19,7 +19,7 @@
 
     // --- CONFIGURAÇÕES GERAIS ---
     const CONFIG = {
-        SCRIPT_VERSION: GM_info.script.version || '14.0.0',
+        SCRIPT_VERSION: GM_info.script.version || '14.1.0',
         UPDATE_DEBOUNCE_MS: 250,
     };
 
@@ -33,10 +33,9 @@
     // --- SELETORES DE DOM ---
     const SELECTORS = {
         mainContainer: 'app-chat-list-container > section',
-        originalChatList: 'app-chat-list, app-queue-list',
+        originalChatLists: 'app-chat-list, app-queue-list',
         allChatItems: 'app-chat-list-item, app-queue-item',
         alertIcon: 'app-icon[icon="tablerAlertCircle"]',
-        // Seletor para encontrar o texto de status, como "Aguardando"
         statusTagSpan: 'app-tag span',
     };
 
@@ -78,7 +77,7 @@
     });
 
     // =================================================================================
-    // INJEÇÃO DE ESTILOS E UI
+    // INJEÇÃO DE ESTILOS
     // =================================================================================
     function injectStyles() {
         if (document.getElementById('bplus-custom-styles')) return;
@@ -99,16 +98,21 @@
 
         GM_addStyle(`
             #bplus-custom-styles { display: none; }
-            app-chat-list-container > section > ${SELECTORS.originalChatList} { display: none !important; }
+            /* CORREÇÃO VISUAL: Esconde a lista original sem usar display:none */
+            app-chat-list-container > section > ${SELECTORS.originalChatLists} {
+                position: absolute !important; opacity: 0 !important;
+                width: 0 !important; height: 0 !important;
+                overflow: hidden !important; pointer-events: none !important;
+                z-index: -999 !important;
+            }
+
             #crx-main-container { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
             .crx-layout-tabs #crx-list-layout-container, .crx-layout-list #crx-tabs-layout-container { display: none; }
 
-            /* --- Abas --- */
             .crx-filter-tabs {
-                display: flex; flex-shrink: 0; overflow-x: auto; overflow-y: hidden; /* Correção da Barra de Rolagem */
-                height: 48px; /* Altura fixa para o container das abas */
-                align-items: center; padding: 0 8px; background-color: #fff;
-                border-bottom: 1px solid #e0e0e0;
+                display: flex; flex-shrink: 0; overflow-x: auto; overflow-y: hidden;
+                height: 48px; align-items: center; padding: 0 8px;
+                background-color: #fff; border-bottom: 1px solid #e0e0e0;
             }
             .dark .crx-filter-tabs { background-color: #252535; border-bottom-color: #3e374e; }
             .crx-filter-tab { padding: 8px 12px; margin: 0 4px; border-radius: 6px; font-size: 13px; font-weight: 500; color: #666; cursor: pointer; white-space: nowrap; transition: all 0.2s; }
@@ -119,87 +123,77 @@
             .crx-filter-tab .count { background-color: #e0e0e0; color: #555; border-radius: 10px; padding: 1px 6px; font-size: 11px; margin-left: 6px; }
             .dark .crx-filter-tab .count { background-color: #3e374e; color: #ccc; }
 
-            /* --- Grupos Recolhíveis --- */
             .crx-group-header {
                 display: flex; align-items: center; justify-content: space-between;
                 padding: 12px 12px 4px; font-size: 13px; font-weight: 600; color: #6c757d;
                 text-transform: uppercase; position: sticky; top: 0; background: inherit; z-index: 10;
-                cursor: pointer; user-select: none;
+                cursor: pointer; user-select: none; border-bottom: 1px solid #e0e0e0;
             }
+            .dark .crx-group-header { color: #a0a0b0; border-bottom-color: #3e374e; }
+            .crx-group-header.group-waiting { color: #e67e22; } /* Destaque para grupo "Aguardando" */
+            .dark .crx-group-header.group-waiting { color: #f39c12; }
             .crx-group-header .crx-chevron { transition: transform 0.2s ease-in-out; }
             .crx-group-header.collapsed .crx-chevron { transform: rotate(-90deg); }
             .crx-chat-group-items.collapsed { display: none; }
-            .dark .crx-group-header { color: #a0a0b0; }
 
-            /* --- Outros Estilos (mantidos e simplificados) --- */
             .crx-chat-list-container { flex-grow: 1; overflow-y: auto; background-color: #fff; }
             .dark .crx-chat-list-container { background-color: #252535; }
-            .crx-tg-item { display: flex; align-items: center; padding: 8px 12px; border-bottom: 1px solid #f0f0f0; cursor: pointer; border-left: 5px solid transparent; }
+            .crx-tg-item { display: flex; align-items: center; padding: 8px 12px; border-bottom: 1px solid #f0f0f0; cursor: pointer; border-left: 5px solid transparent; transition: background-color 0.15s; }
             .dark .crx-tg-item { border-bottom-color: #3e374e; }
             .crx-tg-item.active { background-color: #5e47d0 !important; color: white; border-left-color: #5e47d0 !important; }
-            .crx-tg-item.is-waiting { border-left-color: #FFA500 !important; background-color: ${hexToRgba('#FFA500', 0.1)} !important; }
-            .dark .crx-tg-item.is-waiting { background-color: ${hexToRgba('#FFA500', 0.2)} !important; }
+            .crx-tg-item.is-waiting { border-left-color: #FFA500 !important; background-color: ${hexToRgba('#FFA500', 0.08)} !important; }
+            .dark .crx-tg-item.is-waiting { background-color: ${hexToRgba('#FFA500', 0.18)} !important; }
             .crx-tg-item.is-alert { border-left-color: #E57373 !important; }
             ${dynamicStyles}
         `);
     }
 
     // =================================================================================
-    // LÓGICA DE DADOS E PARSING
+    // LÓGICA DE DADOS E RENDERIZAÇÃO
     // =================================================================================
     function parseChatItemData(itemElement, index) {
         const spans = Array.from(itemElement.querySelectorAll('span.truncate'));
-        // Verifica se algum span dentro do item contém o texto "Aguardando"
         const isWaiting = Array.from(itemElement.querySelectorAll(SELECTORS.statusTagSpan))
                                .some(span => span.textContent?.includes('Aguardando'));
         const isAlert = !isWaiting && !!itemElement.querySelector(SELECTORS.alertIcon);
 
         return {
             id: `crx-item-${index}`,
-            solicitante: spans[0]?.innerText.trim() || 'Usuário anônimo',
-            revenda: spans[1]?.innerText.trim() || 'Sem revenda',
+            solicitante: spans[0]?.innerText.trim() || 'Usuário',
+            revenda: spans[1]?.innerText.trim() || 'Sem Revenda',
             categoria: itemElement.querySelector('span.shrink-0')?.innerText.trim() || 'Sem Categoria',
-            isWaiting,
-            isAlert,
+            isWaiting, isAlert,
             isActive: itemElement.classList.contains('active'),
             isMyChat: !!itemElement.closest('app-chat-list')?.querySelector('header span')?.textContent.includes('Meus chats'),
             originalElement: itemElement,
         };
     }
 
-    // =================================================================================
-    // LÓGICA DE RENDERIZAÇÃO E ATUALIZAÇÃO DA UI
-    // =================================================================================
     function createChatItemElement(chatData) {
         const item = document.createElement('div');
         item.dataset.itemId = chatData.id;
         item.addEventListener('click', () => chatData.originalElement.click());
-
         item.innerHTML = `
             <div class="crx-tg-avatar is-icon">${ICONS.USER}</div>
             <div class="crx-tg-content">
                 <div class="crx-tg-title">${chatData.solicitante}</div>
                 <div class="crx-tg-subtitle"><span>${chatData.revenda}</span></div>
-            </div>
-        `;
+            </div>`;
         updateChatItemElement(item, chatData);
         return item;
     }
 
     function updateChatItemElement(element, data) {
         const safeCategory = makeSafeForCSS(data.categoria);
-        element.className = 'crx-tg-item';
+        element.className = 'crx-tg-item'; // Reseta classes
         element.classList.add(`crx-item-bg-${safeCategory}`);
         if (data.isActive) element.classList.add('active');
         if (data.isAlert) element.classList.add('is-alert');
         if (data.isWaiting) element.classList.add('is-waiting');
     }
 
-    function renderInitialShell() {
-        const originalContainer = document.querySelector(SELECTORS.mainContainer);
-        if (!originalContainer || document.getElementById('crx-main-container')) return;
-
-        originalContainer.innerHTML = `
+    function renderInitialShell(container) {
+        container.innerHTML = `
             <div id="crx-main-container">
                 <div class="crx-controls-container">
                     <button id="crx-layout-toggle" title="Alternar Layout">${ICONS.LAYOUT}</button>
@@ -221,12 +215,11 @@
     const updateChatList = debounce(() => {
         const allChatItems = Array.from(document.querySelectorAll(SELECTORS.allChatItems));
         const newChatsData = new Map(allChatItems.map((el, i) => [el, parseChatItemData(el, i)]).map(entry => [entry[1].id, entry[1]]));
-        const newChatIds = new Set(newChatsData.keys());
         const oldChatIds = new Set(STATE.renderedChats.keys());
 
         for (const id of oldChatIds) {
-            if (!newChatIds.has(id)) {
-                STATE.renderedChats.get(id).element.remove();
+            if (!newChatsData.has(id)) {
+                STATE.renderedChats.get(id)?.element.remove();
                 STATE.renderedChats.delete(id);
             }
         }
@@ -250,9 +243,8 @@
         mainContainer.className = 'crx-layout-' + STATE.activeLayout;
 
         const allChatsData = Array.from(STATE.renderedChats.values()).map(item => item.data);
-        const sortFn = (a, b) => (b.isAlert ? 2 : 0) - (a.isAlert ? 2 : 0);
+        const sortFn = (a, b) => (b.isAlert ? 1 : 0) - (a.isAlert ? 1 : 0);
 
-        // Separação em 3 grupos principais
         const waitingChats = allChatsData.filter(c => c.isWaiting).sort(sortFn);
         const remainingChats = allChatsData.filter(c => !c.isWaiting);
         const myChats = remainingChats.filter(c => c.isMyChat).sort(sortFn);
@@ -267,33 +259,24 @@
 
     function appendGroupToFragment(fragment, title, chats, groupKey) {
         if (chats.length === 0) return;
-
         const isCollapsed = STATE.collapsedGroups.has(groupKey);
         
         const header = document.createElement('div');
-        header.className = 'crx-group-header';
-        if (isCollapsed) header.classList.add('collapsed');
+        header.className = `crx-group-header ${isCollapsed ? 'collapsed' : ''}`;
+        if (groupKey === 'group_waiting') header.classList.add('group-waiting');
         header.innerHTML = `<span>${title} (${chats.length})</span><span class="crx-chevron">${ICONS.CHEVRON}</span>`;
 
         const itemsContainer = document.createElement('div');
-        itemsContainer.className = 'crx-chat-group-items';
-        if (isCollapsed) itemsContainer.classList.add('collapsed');
-
+        itemsContainer.className = `crx-chat-group-items ${isCollapsed ? 'collapsed' : ''}`;
         chats.forEach(chat => itemsContainer.appendChild(STATE.renderedChats.get(chat.id).element));
         
         header.addEventListener('click', () => {
-            if (STATE.collapsedGroups.has(groupKey)) {
-                STATE.collapsedGroups.delete(groupKey);
-            } else {
-                STATE.collapsedGroups.add(groupKey);
-            }
+            STATE.collapsedGroups.has(groupKey) ? STATE.collapsedGroups.delete(groupKey) : STATE.collapsedGroups.add(groupKey);
             GM_setValue('collapsedGroups', JSON.stringify(Array.from(STATE.collapsedGroups)));
             header.classList.toggle('collapsed');
             itemsContainer.classList.toggle('collapsed');
         });
-
-        fragment.appendChild(header);
-        fragment.appendChild(itemsContainer);
+        fragment.append(header, itemsContainer);
     }
     
     function updateTabsLayout(waitingChats, myChats, otherChats) {
@@ -301,39 +284,23 @@
         const listContainer = document.querySelector('#crx-tabs-layout-container .crx-chat-list-container');
         if (!tabsContainer || !listContainer) return;
         
-        // Atualizar abas...
         const allChats = [...waitingChats, ...myChats, ...otherChats];
-        const categoryCounts = allChats.reduce((acc, chat) => {
-            acc.set(chat.categoria, (acc.get(chat.categoria) || 0) + 1);
-            return acc;
-        }, new Map());
-        let tabsHtml = `<div class="crx-filter-tab ${STATE.activeFilter === 'Todos' ? 'active' : ''}" data-filter="Todos">Todos <span class="count">${allChats.length}</span></div>`;
-        [...categoryCounts.entries()].sort().forEach(([category, count]) => {
-            tabsHtml += `<div class="crx-filter-tab ${STATE.activeFilter === category ? 'active' : ''}" data-filter="${category}">${category.replace('Suporte - ','')} <span class="count">${count}</span></div>`;
-        });
-        tabsContainer.innerHTML = tabsHtml;
-        tabsContainer.querySelectorAll('.crx-filter-tab').forEach(tab => {
-            tab.addEventListener('click', () => { STATE.activeFilter = tab.getAttribute('data-filter'); updateFullUI(); });
-        });
+        const categoryCounts = allChats.reduce((acc, chat) => (acc.set(chat.categoria, (acc.get(chat.categoria) || 0) + 1), acc), new Map());
+        tabsContainer.innerHTML = `<div class="crx-filter-tab ${STATE.activeFilter === 'Todos' ? 'active' : ''}" data-filter="Todos">Todos <span class="count">${allChats.length}</span></div>` +
+            [...categoryCounts.entries()].sort().map(([category, count]) =>
+                `<div class="crx-filter-tab ${STATE.activeFilter === category ? 'active' : ''}" data-filter="${category}">${category.replace('Suporte - ','')} <span class="count">${count}</span></div>`
+            ).join('');
+        tabsContainer.querySelectorAll('.crx-filter-tab').forEach(tab => tab.addEventListener('click', () => { STATE.activeFilter = tab.dataset.filter; updateFullUI(); }));
 
-        // Atualizar lista
         listContainer.innerHTML = '';
         const fragment = document.createDocumentFragment();
-        
         const filterFn = chat => STATE.activeFilter === 'Todos' || chat.categoria === STATE.activeFilter;
 
         appendGroupToFragment(fragment, "Aguardando Atendimento", waitingChats.filter(filterFn), "group_waiting");
         appendGroupToFragment(fragment, "Meus Chats", myChats.filter(filterFn), "group_mychats");
         
-        const filteredOtherChats = otherChats.filter(filterFn);
-        const groupedChats = filteredOtherChats.reduce((acc, chat) => {
-            (acc[chat.categoria] = acc[chat.categoria] || []).push(chat);
-            return acc;
-        }, {});
-
-        Object.keys(groupedChats).sort().forEach(category => {
-            appendGroupToFragment(fragment, category, groupedChats[category], `group_${makeSafeForCSS(category)}`);
-        });
+        const groupedChats = otherChats.filter(filterFn).reduce((acc, chat) => ((acc[chat.categoria] = acc[chat.categoria] || []).push(chat), acc), {});
+        Object.keys(groupedChats).sort().forEach(category => appendGroupToFragment(fragment, category, groupedChats[category], `group_${makeSafeForCSS(category)}`));
         
         listContainer.appendChild(fragment);
     }
@@ -341,21 +308,14 @@
     function updateListLayout(waitingChats, myChats, otherChats) {
         const listContainer = document.getElementById('crx-list-layout-container');
         if (!listContainer) return;
-        
         listContainer.innerHTML = '';
         const fragment = document.createDocumentFragment();
 
         appendGroupToFragment(fragment, "Aguardando Atendimento", waitingChats, "group_waiting");
         appendGroupToFragment(fragment, "Meus Chats", myChats, "group_mychats");
 
-        const groupedChats = otherChats.reduce((acc, chat) => {
-            (acc[chat.categoria] = acc[chat.categoria] || []).push(chat);
-            return acc;
-        }, {});
-
-        Object.keys(groupedChats).sort().forEach(category => {
-            appendGroupToFragment(fragment, category, groupedChats[category], `group_${makeSafeForCSS(category)}`);
-        });
+        const groupedChats = otherChats.reduce((acc, chat) => ((acc[chat.categoria] = acc[chat.categoria] || []).push(chat), acc), {});
+        Object.keys(groupedChats).sort().forEach(category => appendGroupToFragment(fragment, category, groupedChats[category], `group_${makeSafeForCSS(category)}`));
 
         listContainer.appendChild(fragment);
     }
@@ -368,18 +328,19 @@
         STATE.isInitialized = true;
 
         injectStyles();
-        const chatListContainer = await waitForElement(SELECTORS.mainContainer);
+        const mainSection = await waitForElement(SELECTORS.mainContainer);
         log("Container de chat encontrado. Inicializando UI.");
 
-        renderInitialShell();
+        renderInitialShell(mainSection);
         updateChatList();
 
         const observer = new MutationObserver(updateChatList);
-        observer.observe(chatListContainer, { childList: true, subtree: true });
+        observer.observe(mainSection, { childList: true, subtree: true });
         
         log("B.Plus! inicializado e monitorando alterações.");
     }
 
+    // Garante que o script execute no momento certo
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', initialize);
     } else {
