@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         B.PLUS
 // @namespace    http://tampermonkey.net/
-// @version      17.0.0 // Híbrido: Fundação estável (v10) + Features e correções de clique (v15).
-// @description  Combina a estabilidade da renderização do v10 com os recursos e a precisão de dados do v15, incluindo a correção definitiva para cliques incorretos e a exibição de chats em espera.
+// @version      18.0.0 // Correção de inicialização para evitar tela de carregamento infinita.
+// @description  Corrige o problema de "tela de carregamento infinita" ao aguardar a estabilização da aplicação Beemore antes de iniciar.
 // @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
 // @grant        GM_addStyle
@@ -16,8 +16,9 @@
 
     // --- CONFIGURAÇÕES GERAIS ---
     const CONFIG = {
-        SCRIPT_VERSION: GM_info.script.version || '15.0.6',
-        UPDATE_INTERVAL_MS: 1500, // Intervalo para verificar mudanças no DOM
+        SCRIPT_VERSION: GM_info.script.version || '15.0.7',
+        UPDATE_DEBOUNCE_MS: 300,
+        STABILIZATION_DELAY_MS: 1500, // Atraso crucial para evitar a tela de carregamento infinita
     };
 
     // --- ÍCONES SVG ---
@@ -41,7 +42,6 @@
         activeFilter: 'Todos',
         activeLayout: GM_getValue('activeLayout', 'tabs'),
         collapsedGroups: new Set(JSON.parse(GM_getValue('collapsedGroups', '[]'))),
-        lastChatCount: 0,
         isInitialized: false,
     };
 
@@ -49,6 +49,7 @@
     // FUNÇÕES UTILITÁRIAS
     // =================================================================================
     const log = (message) => console.log(`[B.Plus! v${CONFIG.SCRIPT_VERSION}] ${message}`);
+    const debounce = (func, delay) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => func.apply(this, a), delay); }; };
     const makeSafeForCSS = (name) => name.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase();
     const hexToRgba = (hex, alpha) => {
         let r=0,g=0,b=0;
@@ -57,12 +58,15 @@
         return `rgba(${r},${g},${b},${alpha})`;
     };
     const waitForElement = (selector) => new Promise(resolve => {
-        const el = document.querySelector(selector);
-        if (el) return resolve(el);
-        const observer = new MutationObserver(() => {
+        const check = () => {
             const el = document.querySelector(selector);
-            if (el) { observer.disconnect(); resolve(el); }
-        });
+            if (el) {
+                if (observer) observer.disconnect();
+                resolve(el);
+            }
+        };
+        const observer = new MutationObserver(check);
+        check();
         observer.observe(document.body, { childList: true, subtree: true });
     });
 
@@ -83,7 +87,6 @@
                 .dark .crx-item-bg-${safeCategory} { background-color: ${hexToRgba(color, 0.15)} !important; }
             `;
         }).join('');
-
         GM_addStyle(`
             #bplus-custom-styles{display:none}
             body.bplus-active app-chat-list-container > section > :is(app-chat-list, app-queue-list) { display: none !important; }
@@ -200,8 +203,7 @@
             </div>
             <div class="crx-tg-meta">
                 <span class="crx-unread-badge"></span>
-            </div>
-        `;
+            </div>`;
         
         const unreadBadge = item.querySelector('.crx-unread-badge');
         if (chatData.unreadCount > 0) {
@@ -218,29 +220,18 @@
                 chatData.originalServiceWarningButton.click();
             };
         }
-        
         container.appendChild(item);
     }
-    
-    // =================================================================================
-    // LÓGICA DE RENDERIZAÇÃO E ATUALIZAÇÃO
-    // =================================================================================
-    function rebuildAndRenderUI() {
-        const allOriginalItems = Array.from(document.querySelectorAll(SELECTORS.allChatItems));
-        
-        if (allOriginalItems.length === STATE.lastChatCount && document.getElementById('crx-main-container')) {
-            // Se o número de chats não mudou, podemos pular a reconstrução completa para evitar piscar a tela
-            // Apenas atualizamos o filtro se necessário.
-            if(STATE.activeLayout === 'tabs') applyChatFilter();
-            return;
-        }
-        STATE.lastChatCount = allOriginalItems.length;
 
+    const debouncedRebuild = debounce(rebuildAndRenderUI, CONFIG.UPDATE_DEBOUNCE_MS);
+
+    function rebuildAndRenderUI() {
         const mainContainer = document.getElementById('crx-main-container');
         if (!mainContainer) return;
 
         mainContainer.className = 'crx-layout-' + STATE.activeLayout;
 
+        const allOriginalItems = Array.from(document.querySelectorAll(SELECTORS.allChatItems));
         const allChatsData = allOriginalItems.map(parseChatItemData);
         
         const sortFn = (a, b) => (b.isAlert - a.isAlert) || (b.isWaiting - a.isWaiting);
@@ -290,16 +281,14 @@
     }
     
     function appendGroupsToContainer(container, waiting, my, other) {
-        appendGroupToFragment(container, "Aguardando Atendimento", waiting, "group_waiting");
-        appendGroupToFragment(container, "Meus Chats", my, "group_mychats");
-
+        appendGroup(container, "Aguardando Atendimento", waiting, "group_waiting");
+        appendGroup(container, "Meus Chats", my, "group_mychats");
         const grouped = other.reduce((a, c) => ((a[c.categoria] = a[c.categoria] || []).push(c), a), {});
-        Object.keys(grouped).sort().forEach(cat => appendGroupToFragment(container, cat, grouped[cat], `group_${makeSafeForCSS(cat)}`));
+        Object.keys(grouped).sort().forEach(cat => appendGroup(container, cat, grouped[cat], `group_${makeSafeForCSS(cat)}`));
     }
 
-    function appendGroupToFragment(container, title, chats, groupKey) {
+    function appendGroup(container, title, chats, groupKey) {
         if (chats.length === 0) return;
-
         const isCollapsed = STATE.collapsedGroups.has(groupKey);
         const header = document.createElement('div');
         header.className = `crx-group-header ${isCollapsed ? 'collapsed' : ''}`;
@@ -319,25 +308,21 @@
             header.classList.toggle('collapsed');
             itemsContainer.classList.toggle('collapsed');
         });
-
         container.append(header, itemsContainer);
     }
 
     function applyChatFilter() {
         const listContainer = document.querySelector('#crx-tabs-layout-container .crx-chat-list-container');
         if (!listContainer) return;
-
         listContainer.querySelectorAll('.crx-group-header').forEach(header => {
             const itemsContainer = header.nextElementSibling;
             if (!itemsContainer) return;
-
             let visibleItemsCount = 0;
             Array.from(itemsContainer.children).forEach(item => {
                 const isVisible = STATE.activeFilter === 'Todos' || item.dataset.category === STATE.activeFilter;
                 item.style.display = isVisible ? '' : 'none';
                 if (isVisible) visibleItemsCount++;
             });
-
             header.style.display = visibleItemsCount > 0 ? '' : 'none';
             header.querySelector('span:first-child').textContent = `${header.dataset.originalTitle} (${visibleItemsCount})`;
         });
@@ -346,45 +331,54 @@
     // =================================================================================
     // INICIALIZAÇÃO
     // =================================================================================
-    function initialize() {
+    async function initialize() {
         if (STATE.isInitialized) return;
-        STATE.isInitialized = true;
-        
-        injectStyles();
-        
-        const mainSection = document.querySelector(SELECTORS.mainContainer);
-        if (!mainSection) { log("ERRO: Container principal não encontrado."); return; }
-        
-        const shell = document.createElement('div');
-        shell.id = 'crx-main-container';
-        shell.innerHTML = `
-            <div class="crx-controls-container">
-                <button id="crx-layout-toggle" title="Alternar Layout">${ICONS.LAYOUT}</button>
-            </div>
-            <div id="crx-tabs-layout-container">
-                <div class="crx-filter-tabs"></div>
-                <div class="crx-chat-list-container"></div>
-            </div>
-            <div id="crx-list-layout-container" class="crx-chat-list-container"></div>`;
-        mainSection.appendChild(shell);
+        log("Aguardando o container principal do chat...");
+        const mainSection = await waitForElement(SELECTORS.mainContainer);
 
-        document.getElementById('crx-layout-toggle').addEventListener('click', () => {
-            STATE.activeLayout = (STATE.activeLayout === 'tabs') ? 'list' : 'tabs';
-            GM_setValue('activeLayout', STATE.activeLayout);
-            rebuildAndRenderUI();
-        });
+        log("Container detectado. Aguardando estabilização da aplicação Beemore...");
+        setTimeout(() => {
+            log("Estabilização concluída. Iniciando a UI do B.Plus!.");
+            if (!document.querySelector(SELECTORS.allChatItems)) {
+                log("ERRO: Nenhum item de chat encontrado após a espera.");
+                // Tenta novamente se falhar, a página pode ser lenta
+                setTimeout(rebuildAndRenderUI, 2000);
+            }
 
-        document.body.classList.add('bplus-active');
-        
-        // Usa um MutationObserver para disparar a reconstrução de forma eficiente
-        const observer = new MutationObserver(rebuildAndRenderUI);
-        observer.observe(mainSection, { childList: true, subtree: true });
+            STATE.isInitialized = true;
+            
+            let shell = document.getElementById('crx-main-container');
+            if (!shell) {
+                shell = document.createElement('div');
+                shell.id = 'crx-main-container';
+                shell.innerHTML = `
+                    <div class="crx-controls-container">
+                        <button id="crx-layout-toggle" title="Alternar Layout">${ICONS.LAYOUT}</button>
+                    </div>
+                    <div id="crx-tabs-layout-container">
+                        <div class="crx-filter-tabs"></div>
+                        <div class="crx-chat-list-container"></div>
+                    </div>
+                    <div id="crx-list-layout-container" class="crx-chat-list-container"></div>`;
+                mainSection.appendChild(shell);
+                
+                document.getElementById('crx-layout-toggle').addEventListener('click', () => {
+                    STATE.activeLayout = (STATE.activeLayout === 'tabs') ? 'list' : 'tabs';
+                    GM_setValue('activeLayout', STATE.activeLayout);
+                    rebuildAndRenderUI();
+                });
+            }
 
-        // Execução inicial
-        rebuildAndRenderUI();
-        
-        log("B.Plus! carregado e monitorando.");
+            document.body.classList.add('bplus-active');
+            rebuildAndRenderUI(); // Primeira execução
+            
+            const observer = new MutationObserver(debouncedRebuild);
+            observer.observe(mainSection, { childList: true, subtree: true });
+            
+            log("B.Plus! carregado e monitorando.");
+
+        }, CONFIG.STABILIZATION_DELAY_MS);
     }
-    
-    waitForElement(SELECTORS.allChatItems).then(initialize);
+
+    initialize();
 })();
