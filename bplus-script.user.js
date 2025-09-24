@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         B.PLUS
 // @namespace    http://tampermonkey.net/
-// @version      15.0.3 // Parsing de dados (nomes) corrigido com base na estrutura real do HTML.
-// @description  Renderização otimizada de chats com filtragem rápida e extração de dados robusta para nomes de solicitante e revenda.
+// @version      16 // Adiciona bolha de notificação (não lido) e ícone de serviço incorreto.
+// @description  Renderização otimizada de chats com notificação de não lido e alerta de serviço incorreto.
 // @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
 // @grant        GM_addStyle
@@ -16,7 +16,7 @@
 
     // --- CONFIGURAÇÕES GERAIS ---
     const CONFIG = {
-        SCRIPT_VERSION: GM_info.script.version || '15.0.3',
+        SCRIPT_VERSION: GM_info.script.version || '15.0.4',
         UPDATE_DEBOUNCE_MS: 300,
     };
 
@@ -24,7 +24,8 @@
     const ICONS = {
         USER: `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"></path></svg>`,
         LAYOUT: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>`,
-        CHEVRON: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg>`
+        CHEVRON: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg>`,
+        WARNING: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"></path></svg>`
     };
 
     // --- SELETORES DE DOM ---
@@ -34,6 +35,8 @@
         allChatItems: 'app-chat-list-item, app-queue-item',
         alertIcon: 'app-icon[icon="tablerAlertCircle"]',
         statusTag: 'app-tag',
+        unreadCountBadge: 'div[class*="bg-red-600"]',
+        serviceWarningIcon: 'app-icon[icon="tablerExclamationCircle"]'
     };
 
     // --- ESTADO DA APLICAÇÃO ---
@@ -68,7 +71,7 @@
     });
 
     // =================================================================================
-    // INJEÇÃO DE ESTILOS (Sem alterações)
+    // INJEÇÃO DE ESTILOS
     // =================================================================================
     function injectStyles() {
         if (document.getElementById('bplus-custom-styles')) return;
@@ -123,8 +126,13 @@
             .crx-tg-content{flex-grow:1;min-width:0;margin-left:8px}
             .crx-tg-title{font-weight:500;font-size:14px;color:var(--text-color-primary,#333);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
             .dark .crx-tg-title{color:var(--text-color-dark-primary,#f0f0f0)}
-            .crx-tg-subtitle{font-size:11px;color:var(--text-color-tertiary,#777);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+            .crx-tg-subtitle{display:flex;align-items:center;font-size:11px;color:var(--text-color-tertiary,#777);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
             .dark .crx-tg-subtitle{color:var(--text-color-dark-tertiary,#b0b0b0)}
+            .crx-tg-subtitle > span:first-child { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+            .crx-tg-meta { display: flex; flex-direction: column; align-items: flex-end; justify-content: center; margin-left: 8px; flex-shrink: 0; }
+            .crx-unread-badge { display: none; background-color: #ef4444; color: white; font-size: 10px; font-weight: 600; border-radius: 9999px; min-width: 18px; height: 18px; padding: 2px 5px; text-align: center; line-height: 14px; }
+            .crx-service-warning-icon { display: none; align-items: center; justify-content: center; color: #f59e0b; margin-left: 4px; flex-shrink: 0; cursor: pointer; }
+            .crx-service-warning-icon svg { width: 14px; height: 14px; }
             ${dynamicStyles}
         `);
     }
@@ -132,48 +140,38 @@
     // =================================================================================
     // LÓGICA DE DADOS E RENDERIZAÇÃO
     // =================================================================================
-    /**
-     * Extrai os dados de um elemento de chat original do Beemore.
-     * Esta função foi reescrita para ser mais robusta, baseada na estrutura HTML fornecida.
-     */
     function parseChatItemData(itemElement, index) {
         let solicitante = 'Usuário Desconhecido';
         let revenda = 'Sem Revenda';
         let categoria = 'Sem Categoria';
 
         const mainSection = itemElement.querySelector('section');
-
         if (mainSection) {
-            // O nome do solicitante e a categoria estão consistentemente dentro do primeiro <div> da seção.
             const topDiv = mainSection.querySelector('div');
             if (topDiv) {
                 solicitante = topDiv.querySelector('span.font-medium')?.innerText.trim() || solicitante;
                 categoria = topDiv.querySelector('span.shrink-0')?.innerText.trim() || categoria;
             }
-
-            // A revenda está consistentemente no elemento <span_> que é irmão (`nextElementSibling`) do <div> acima.
             const revendaElement = topDiv?.nextElementSibling;
             if (revendaElement && revendaElement.tagName === 'SPAN') {
-                // O texto da revenda pode conter outros textos (como o de 'Aguardando').
-                // Limpamos o texto pegando apenas o conteúdo principal.
                 const tempRevendaText = revendaElement.innerText.trim();
-
-                // Remove o texto de "Aguardando..." se ele for capturado junto.
                 const waitingTextMatch = tempRevendaText.match(/Aguardando(\s\(.*\))?/);
                 let cleanedRevendaText = tempRevendaText;
                 if (waitingTextMatch) {
                     cleanedRevendaText = tempRevendaText.replace(waitingTextMatch[0], '').trim();
                 }
-
-                if (cleanedRevendaText) {
-                    revenda = cleanedRevendaText;
-                }
+                if (cleanedRevendaText) { revenda = cleanedRevendaText; }
             }
         }
 
-        // A lógica para 'isWaiting' e outros status continua a mesma e é confiável.
-        const isWaiting = Array.from(itemElement.querySelectorAll('app-tag'))
-                               .some(tag => tag.textContent?.toLowerCase().includes('aguardando'));
+        const unreadElement = itemElement.querySelector(SELECTORS.unreadCountBadge);
+        const unreadCount = unreadElement ? parseInt(unreadElement.innerText, 10) || 0 : 0;
+        
+        const serviceWarningElement = itemElement.querySelector(SELECTORS.serviceWarningIcon);
+        const hasServiceWarning = !!serviceWarningElement;
+        const originalServiceWarningButton = hasServiceWarning ? serviceWarningElement.closest('button') : null;
+
+        const isWaiting = Array.from(itemElement.querySelectorAll('app-tag')).some(tag => tag.textContent?.toLowerCase().includes('aguardando'));
         const isAlert = !isWaiting && !!itemElement.querySelector(SELECTORS.alertIcon);
         const isActive = itemElement.classList.contains('active');
         const isMyChat = !!itemElement.closest('app-chat-list')?.querySelector('header span')?.textContent.includes('Meus chats');
@@ -181,8 +179,8 @@
         return {
             id: `crx-item-${index}`,
             solicitante, revenda, categoria, isWaiting, isAlert,
-            isActive, isMyChat,
-            originalElement: itemElement,
+            unreadCount, hasServiceWarning, originalServiceWarningButton,
+            isActive, isMyChat, originalElement: itemElement,
         };
     }
 
@@ -190,7 +188,19 @@
         const item = document.createElement('div');
         item.dataset.itemId = chatData.id;
         item.addEventListener('click', () => chatData.originalElement.click());
-        item.innerHTML = `<div class="crx-tg-avatar is-icon">${ICONS.USER}</div><div class="crx-tg-content"><div class="crx-tg-title">${chatData.solicitante}</div><div class="crx-tg-subtitle"><span>${chatData.revenda}</span></div></div>`;
+        item.innerHTML = `
+            <div class="crx-tg-avatar is-icon">${ICONS.USER}</div>
+            <div class="crx-tg-content">
+                <div class="crx-tg-title">${chatData.solicitante}</div>
+                <div class="crx-tg-subtitle">
+                    <span>${chatData.revenda}</span>
+                    <span class="crx-service-warning-icon" title="Serviço incorreto"></span>
+                </div>
+            </div>
+            <div class="crx-tg-meta">
+                <span class="crx-unread-badge"></span>
+            </div>
+        `;
         updateChatItemElement(item, chatData);
         return item;
     }
@@ -202,9 +212,30 @@
         if (data.isWaiting) element.classList.add('is-waiting');
         element.dataset.category = data.categoria;
         
-        // Atualiza o texto diretamente para evitar recriação de elemento
         element.querySelector('.crx-tg-title').textContent = data.solicitante;
-        element.querySelector('.crx-tg-subtitle span').textContent = data.revenda;
+        element.querySelector('.crx-tg-subtitle span:first-child').textContent = data.revenda;
+
+        const unreadBadge = element.querySelector('.crx-unread-badge');
+        if (data.unreadCount > 0) {
+            unreadBadge.textContent = data.unreadCount;
+            unreadBadge.style.display = 'block';
+        } else {
+            unreadBadge.style.display = 'none';
+        }
+
+        const warningIcon = element.querySelector('.crx-service-warning-icon');
+        if (data.hasServiceWarning && data.originalServiceWarningButton) {
+            warningIcon.innerHTML = ICONS.WARNING;
+            warningIcon.style.display = 'inline-flex';
+            warningIcon.onclick = (e) => {
+                e.stopPropagation();
+                log('Clicando no botão original de serviço incorreto.');
+                data.originalServiceWarningButton.click();
+            };
+        } else {
+            warningIcon.style.display = 'none';
+            warningIcon.onclick = null;
+        }
     }
 
     function renderInitialShell(container) {
@@ -216,7 +247,7 @@
         document.getElementById('crx-layout-toggle').addEventListener('click', () => {
             STATE.activeLayout = (STATE.activeLayout === 'tabs') ? 'list' : 'tabs';
             GM_setValue('activeLayout', STATE.activeLayout);
-            updateFullUI(true); // Força a re-renderização total ao trocar de layout
+            updateFullUI(true);
         });
     }
 
@@ -247,7 +278,6 @@
         for (const [id, data] of newChatsMap.entries()) {
             const existing = STATE.renderedChats.get(id);
             if (existing) {
-                // Compara dados antigos e novos para ver se uma atualização visual é necessária
                 if (JSON.stringify(existing.data) !== JSON.stringify(data)) {
                     updateChatItemElement(existing.element, data);
                     existing.data = data;
@@ -260,18 +290,16 @@
         }
         
         if (hasChanges) {
-            updateFullUI(true); // Força a reconstrução da lista se houveram mudanças
+            updateFullUI(true);
         }
     }, CONFIG.UPDATE_DEBOUNCE_MS);
 
-    // Adicionado `forceRebuild` para otimizar
     function updateFullUI(forceRebuild = false) {
         const mainContainer = document.getElementById('crx-main-container');
         if (!mainContainer) return;
 
         mainContainer.className = 'crx-layout-' + STATE.activeLayout;
         
-        // Apenas reconstrói a lista se for forçado (mudança de chat, troca de layout)
         if (forceRebuild) {
             const allChatsData = Array.from(STATE.renderedChats.values()).map(item => item.data);
             const sortFn = (a, b) => (b.isAlert - a.isAlert) || (b.isWaiting - a.isWaiting);
@@ -287,7 +315,6 @@
                 updateListLayout(waitingChats, myChats, otherChats);
             }
         } else {
-            // Se não for forçado, apenas aplica o filtro (muito mais rápido)
              if (STATE.activeLayout === 'tabs') {
                 applyChatFilter();
              }
@@ -358,7 +385,7 @@
             STATE.activeFilter = newFilter;
             tabsContainer.querySelector('.crx-filter-tab.active')?.classList.remove('active');
             e.currentTarget.classList.add('active');
-            updateFullUI(false); // Apenas aplica o filtro, não reconstrói
+            updateFullUI(false);
         }));
 
         listContainer.innerHTML = '';
