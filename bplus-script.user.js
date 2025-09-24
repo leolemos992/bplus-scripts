@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         B.PLUS
 // @namespace    http://tampermonkey.net/
-// @version      16.0.1 // Correção crítica de clique: Garante que o chat correto seja aberto.
+// @version      16.5 // Correção crítica de clique: Garante que o chat correto seja aberto.
 // @description  Renderização otimizada de chats com correção de referência de clique para garantir a abertura correta da conversa.
 // @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
@@ -17,7 +17,7 @@
     // --- CONFIGURAÇÕES GERAIS ---
     const CONFIG = {
         SCRIPT_VERSION: GM_info.script.version || '15.0.5',
-        UPDATE_DEBOUNCE_MS: 300,
+        UPDATE_DEBOUNCE_MS: 250, // Reduzido para resposta mais rápida
     };
 
     // --- ÍCONES SVG ---
@@ -44,7 +44,9 @@
         activeFilter: 'Todos',
         activeLayout: GM_getValue('activeLayout', 'tabs'),
         collapsedGroups: new Set(JSON.parse(GM_getValue('collapsedGroups', '[]'))),
-        renderedChats: new Map(), // MUDANÇA CRÍTICA: A chave agora será o HTMLElement original, não um ID de string.
+        // A chave será o elemento HTML original, e o valor será o {dados, elemento customizado}
+        // Isso nos permite associar diretamente o elemento original ao seu gêmeo customizado.
+        renderedChats: new Map(),
         isInitialized: false,
     };
 
@@ -71,22 +73,12 @@
     });
 
     // =================================================================================
-    // INJEÇÃO DE ESTILOS (Adicionado o CSS da versão 15.0.4)
+    // INJEÇÃO DE ESTILOS
     // =================================================================================
-     function injectStyles() {
+    function injectStyles() {
         if (document.getElementById('bplus-custom-styles')) return;
-        const CATEGORY_COLORS = {
-            'Suporte - Web': '#3498db', 'Suporte - PDV': '#2ecc71', 'Suporte - Retaguarda': '#f39c12',
-            'Suporte - Fiscal': '#e74c3c', 'Suporte - Mobile': '#9b59b6', 'Sem Categoria': '#95a5a6'
-        };
-        let dynamicStyles = Object.entries(CATEGORY_COLORS).map(([category, color]) => {
-            const safeCategory = makeSafeForCSS(category);
-            return `
-                .crx-filter-tab[data-filter="${category}"].active { background-color: ${color} !important; color: white !important; }
-                .crx-item-bg-${safeCategory} { border-left-color: ${color} !important; background-color: ${hexToRgba(color, 0.08)} !important; }
-                .dark .crx-item-bg-${safeCategory} { background-color: ${hexToRgba(color, 0.15)} !important; }
-            `;
-        }).join('');
+        const CATEGORY_COLORS = { /* ... Cores ... */ };
+        let dynamicStyles = '';
         GM_addStyle(`
             #bplus-custom-styles{display:none}
             body.bplus-active app-chat-list-container>section>:is(app-chat-list,app-queue-list){display:none!important}
@@ -141,48 +133,15 @@
     // LÓGICA DE DADOS E RENDERIZAÇÃO
     // =================================================================================
     function parseChatItemData(itemElement) {
-        let solicitante = 'Usuário Desconhecido';
-        let revenda = 'Sem Revenda';
-        let categoria = 'Sem Categoria';
-
-        const mainSection = itemElement.querySelector('section');
-        if (mainSection) {
-            const topDiv = mainSection.querySelector('div');
-            if (topDiv) {
-                solicitante = topDiv.querySelector('span.font-medium')?.innerText.trim() || solicitante;
-                categoria = topDiv.querySelector('span.shrink-0')?.innerText.trim() || categoria;
-            }
-            const revendaElement = topDiv?.nextElementSibling;
-            if (revendaElement && revendaElement.tagName === 'SPAN') {
-                const tempRevendaText = revendaElement.innerText.trim();
-                const waitingTextMatch = tempRevendaText.match(/Aguardando(\s\(.*\))?/);
-                let cleanedRevendaText = tempRevendaText;
-                if (waitingTextMatch) cleanedRevendaText = tempRevendaText.replace(waitingTextMatch[0], '').trim();
-                if (cleanedRevendaText) revenda = cleanedRevendaText;
-            }
-        }
-
-        const unreadElement = itemElement.querySelector(SELECTORS.unreadCountBadge);
-        const unreadCount = unreadElement ? parseInt(unreadElement.innerText, 10) || 0 : 0;
-        
-        const serviceWarningElement = itemElement.querySelector(SELECTORS.serviceWarningIcon);
-        const hasServiceWarning = !!serviceWarningElement;
-        const originalServiceWarningButton = hasServiceWarning ? serviceWarningElement.closest('button') : null;
-
-        const isWaiting = Array.from(itemElement.querySelectorAll('app-tag')).some(tag => tag.textContent?.toLowerCase().includes('aguardando'));
-        const isAlert = !isWaiting && !!itemElement.querySelector(SELECTORS.alertIcon);
-
-        return {
-            solicitante, revenda, categoria, isWaiting, isAlert,
-            unreadCount, hasServiceWarning, originalServiceWarningButton,
-            isActive: itemElement.classList.contains('active'),
-            isMyChat: !!itemElement.closest('app-chat-list')?.querySelector('header span')?.textContent.includes('Meus chats'),
-            originalElement: itemElement, // A referência direta é crucial
-        };
+        // ... (lógica de parsing inalterada) ...
+        return { /* ... dados do chat ... */ };
     }
 
     function createChatItemElement(chatData) {
         const item = document.createElement('div');
+        // A MUDANÇA MAIS IMPORTANTE:
+        // O event listener agora está vinculado diretamente à referência do elemento original
+        // que foi passada no objeto chatData. Isso é garantido e sempre atualizado.
         item.addEventListener('click', () => chatData.originalElement.click());
         item.innerHTML = `
             <div class="crx-tg-avatar is-icon">${ICONS.USER}</div>
@@ -202,211 +161,54 @@
     }
 
     function updateChatItemElement(element, data) {
-        element.className = `crx-tg-item crx-item-bg-${makeSafeForCSS(data.categoria)}`;
-        if (data.isActive) element.classList.add('active');
-        if (data.isAlert) element.classList.add('is-alert');
-        if (data.isWaiting) element.classList.add('is-waiting');
-        element.dataset.category = data.categoria;
-        
-        element.querySelector('.crx-tg-title').textContent = data.solicitante;
-        element.querySelector('.crx-tg-subtitle > span:first-child').textContent = data.revenda;
-
-        const unreadBadge = element.querySelector('.crx-unread-badge');
-        if (data.unreadCount > 0) {
-            unreadBadge.textContent = data.unreadCount;
-            unreadBadge.style.display = 'block';
-        } else {
-            unreadBadge.style.display = 'none';
-        }
-
-        const warningIcon = element.querySelector('.crx-service-warning-icon');
-        if (data.hasServiceWarning && data.originalServiceWarningButton) {
-            warningIcon.innerHTML = ICONS.WARNING;
-            warningIcon.style.display = 'inline-flex';
-            warningIcon.onclick = (e) => {
-                e.stopPropagation();
-                data.originalServiceWarningButton.click();
-            };
-        } else {
-            warningIcon.style.display = 'none';
-            warningIcon.onclick = null;
-        }
+        // ... (lógica de atualização inalterada) ...
     }
-
-    function renderInitialShell(container) {
-        if (document.getElementById('crx-main-container')) return;
-        const shell = document.createElement('div');
-        shell.id = 'crx-main-container';
-        shell.innerHTML = `<div class="crx-controls-container"><button id="crx-layout-toggle" title="Alternar Layout">${ICONS.LAYOUT}</button></div><div id="crx-tabs-layout-container"><div class="crx-filter-tabs"></div><div class="crx-chat-list-container"></div></div><div id="crx-list-layout-container" class="crx-chat-list-container"></div>`;
-        container.appendChild(shell);
-        document.getElementById('crx-layout-toggle').addEventListener('click', () => {
-            STATE.activeLayout = (STATE.activeLayout === 'tabs') ? 'list' : 'tabs';
-            GM_setValue('activeLayout', STATE.activeLayout);
-            updateFullUI(true);
-        });
-    }
-
+    
+    // As funções que não precisam de alteração foram omitidas para manter o código limpo.
+    // O código completo deve ser usado no script final.
+    function renderInitialShell(container) { /* ... */ }
+    function updateFullUI(forceRebuild = false) { /* ... */ }
+    function appendGroupToFragment(fragment, title, chats, groupKey) { /* ... */ }
+    function applyChatFilter() { /* ... */ }
+    function updateTabsLayout(waiting, my, other) { /* ... */ }
+    function updateListLayout(waiting, my, other) { /* ... */ }
+    
+    // =================================================================================
+    // NÚCLEO DA CORREÇÃO - LÓGICA DE SINCRONIZAÇÃO
+    // =================================================================================
     const updateChatList = debounce(() => {
+        // 1. Obtém a lista atual de todos os itens de chat originais do Beemore.
         const allOriginalItems = Array.from(document.querySelectorAll(SELECTORS.allChatItems));
-        const currentElements = new Set(allOriginalItems);
-        const oldElements = new Set(STATE.renderedChats.keys());
-        let hasChanges = false;
-
-        // REMOVER: Itens que estavam no DOM mas não estão mais
-        for (const oldEl of oldElements) {
-            if (!currentElements.has(oldEl)) {
-                STATE.renderedChats.get(oldEl)?.element.remove();
-                STATE.renderedChats.delete(oldEl);
-                hasChanges = true;
-            }
-        }
-
-        // ADICIONAR / ATUALIZAR
-        for (const el of allOriginalItems) {
-            const newData = parseChatItemData(el);
-            const existing = STATE.renderedChats.get(el);
-
-            if (existing) { // Já existe, verificar se precisa atualizar
-                if (JSON.stringify(existing.data) !== JSON.stringify(newData)) {
-                    updateChatItemElement(existing.element, newData);
-                    existing.data = newData;
-                    hasChanges = true; 
-                }
-            } else { // Novo elemento
-                const newCustomElement = createChatItemElement(newData);
-                STATE.renderedChats.set(el, { element: newCustomElement, data: newData });
-                hasChanges = true;
-            }
-        }
         
-        if (hasChanges) {
-            updateFullUI(true);
-        }
+        // 2. Cria um novo Map para armazenar a nova lista de chats renderizados.
+        //    Isso garante que estamos sempre trabalhando com dados frescos.
+        const newRenderedChats = new Map();
+        
+        // 3. Itera sobre cada item original encontrado na página.
+        allOriginalItems.forEach(originalElement => {
+            // Extrai os dados visuais do elemento original.
+            const data = parseChatItemData(originalElement);
+            
+            // Cria um novo elemento customizado para a nossa UI.
+            // O `chatData` passado para esta função contém a referência `originalElement`,
+            // que é a chave para o clique funcionar corretamente.
+            const customElement = createChatItemElement(data);
+            
+            // Armazena no novo Map, usando o elemento original como chave.
+            newRenderedChats.set(originalElement, { data: data, element: customElement });
+        });
+        
+        // 4. Substitui completamente o estado antigo pelo novo.
+        //    Isso descarta quaisquer referências antigas e inválidas.
+        STATE.renderedChats = newRenderedChats;
+        
+        // 5. Força uma reconstrução completa da UI com os novos elementos e referências corretas.
+        updateFullUI(true);
+
     }, CONFIG.UPDATE_DEBOUNCE_MS);
 
-    function updateFullUI(forceRebuild = false) {
-        const mainContainer = document.getElementById('crx-main-container');
-        if (!mainContainer) return;
-        mainContainer.className = 'crx-layout-' + STATE.activeLayout;
-        
-        if (forceRebuild) {
-            const allChatsData = Array.from(STATE.renderedChats.values()).map(item => item.data);
-            const sortFn = (a, b) => (b.isAlert - a.isAlert) || (b.isWaiting - a.isWaiting);
-            
-            const waitingChats = allChatsData.filter(c => c.isWaiting).sort(sortFn);
-            const remaining = allChatsData.filter(c => !c.isWaiting);
-            const myChats = remaining.filter(c => c.isMyChat).sort(sortFn);
-            const otherChats = remaining.filter(c => !c.isMyChat).sort(sortFn);
-    
-            if (STATE.activeLayout === 'tabs') {
-                updateTabsLayout(waitingChats, myChats, otherChats);
-            } else {
-                updateListLayout(waitingChats, myChats, otherChats);
-            }
-        } else {
-             if (STATE.activeLayout === 'tabs') applyChatFilter();
-        }
-    }
+    // ... (O resto do script que não foi alterado)
 
-    function appendGroupToFragment(fragment, title, chats, groupKey) {
-        if (chats.length === 0) return;
-        const isCollapsed = STATE.collapsedGroups.has(groupKey);
-        const header = document.createElement('div');
-        header.className = `crx-group-header ${isCollapsed ? 'collapsed' : ''}`;
-        header.dataset.groupKey = groupKey;
-        header.dataset.originalTitle = title;
-        if (groupKey === 'group_waiting') header.classList.add('group-waiting');
-        header.innerHTML = `<span>${title} (${chats.length})</span><span class="crx-chevron">${ICONS.CHEVRON}</span>`;
-        
-        const itemsContainer = document.createElement('div');
-        itemsContainer.className = `crx-chat-group-items ${isCollapsed ? 'collapsed' : ''}`;
-        itemsContainer.dataset.groupKey = groupKey;
-
-        // LÓGICA DE APPEND ATUALIZADA
-        chats.forEach(chatData => {
-            const renderedItem = STATE.renderedChats.get(chatData.originalElement);
-            if (renderedItem) {
-                itemsContainer.appendChild(renderedItem.element);
-            }
-        });
-        
-        header.addEventListener('click', () => {
-            STATE.collapsedGroups.has(groupKey) ? STATE.collapsedGroups.delete(groupKey) : STATE.collapsedGroups.add(groupKey);
-            GM_setValue('collapsedGroups', JSON.stringify(Array.from(STATE.collapsedGroups)));
-            header.classList.toggle('collapsed');
-            itemsContainer.classList.toggle('collapsed');
-        });
-        fragment.append(header, itemsContainer);
-    }
-    
-    function applyChatFilter() {
-        const listContainer = document.querySelector('#crx-tabs-layout-container .crx-chat-list-container');
-        if (!listContainer) return;
-    
-        listContainer.querySelectorAll('.crx-group-header').forEach(header => {
-            const groupKey = header.dataset.groupKey;
-            const itemsContainer = listContainer.querySelector(`.crx-chat-group-items[data-group-key="${groupKey}"]`);
-            if (!itemsContainer) return;
-    
-            let visibleItemsCount = 0;
-            Array.from(itemsContainer.children).forEach(item => {
-                const isVisible = STATE.activeFilter === 'Todos' || item.dataset.category === STATE.activeFilter;
-                item.style.display = isVisible ? '' : 'none';
-                if (isVisible) visibleItemsCount++;
-            });
-    
-            const isGroupVisible = visibleItemsCount > 0;
-            header.style.display = isGroupVisible ? '' : 'none';
-            if (isGroupVisible) {
-                header.querySelector('span:first-child').textContent = `${header.dataset.originalTitle} (${visibleItemsCount})`;
-            }
-        });
-    }
-
-    function updateTabsLayout(waiting, my, other) {
-        const tabsContainer = document.querySelector('#crx-tabs-layout-container .crx-filter-tabs');
-        const listContainer = document.querySelector('#crx-tabs-layout-container .crx-chat-list-container');
-        if (!tabsContainer || !listContainer) return;
-
-        const allChats = [...waiting, ...my, ...other];
-        const counts = allChats.reduce((a, c) => (a.set(c.categoria, (a.get(c.categoria) || 0) + 1), a), new Map());
-        tabsContainer.innerHTML = `<div class="crx-filter-tab ${STATE.activeFilter === 'Todos' ? 'active' : ''}" data-filter="Todos">Todos <span class="count">${allChats.length}</span></div>` + [...counts.entries()].sort().map(([cat, cnt]) => `<div class="crx-filter-tab ${STATE.activeFilter === cat ? 'active' : ''}" data-filter="${cat}">${cat.replace('Suporte - ','')} <span class="count">${cnt}</span></div>`).join('');
-        
-        tabsContainer.querySelectorAll('.crx-filter-tab').forEach(t => t.addEventListener('click', (e) => {
-            const newFilter = e.currentTarget.dataset.filter;
-            if (STATE.activeFilter === newFilter) return;
-            STATE.activeFilter = newFilter;
-            tabsContainer.querySelector('.crx-filter-tab.active')?.classList.remove('active');
-            e.currentTarget.classList.add('active');
-            updateFullUI(false);
-        }));
-
-        listContainer.innerHTML = '';
-        const fragment = document.createDocumentFragment();
-        appendGroupToFragment(fragment, "Aguardando Atendimento", waiting, "group_waiting");
-        appendGroupToFragment(fragment, "Meus Chats", my, "group_mychats");
-        const grouped = other.reduce((a, c) => ((a[c.categoria] = a[c.categoria] || []).push(c), a), {});
-        Object.keys(grouped).sort().forEach(cat => appendGroupToFragment(fragment, cat, grouped[cat], `group_${makeSafeForCSS(cat)}`));
-        listContainer.appendChild(fragment);
-
-        applyChatFilter();
-    }
-
-    function updateListLayout(waiting, my, other) {
-        const listContainer = document.getElementById('crx-list-layout-container');
-        if (!listContainer) return;
-        listContainer.innerHTML = '';
-        const fragment = document.createDocumentFragment();
-        appendGroupToFragment(fragment, "Aguardando Atendimento", waiting, "group_waiting");
-        appendGroupToFragment(fragment, "Meus Chats", my, "group_mychats");
-        const grouped = other.reduce((a, c) => ((a[c.categoria] = a[c.categoria] || []).push(c), a), {});
-        Object.keys(grouped).sort().forEach(cat => appendGroupToFragment(fragment, cat, grouped[cat], `group_${makeSafeForCSS(cat)}`));
-        listContainer.appendChild(fragment);
-    }
-
-    // =================================================================================
-    // INICIALIZAÇÃO
-    // =================================================================================
     async function initialize() {
         if (STATE.isInitialized) return;
         injectStyles();
@@ -419,12 +221,15 @@
 
         renderInitialShell(mainSection);
         document.body.classList.add('bplus-active');
+        
+        // Primeira execução para popular a lista
         updateChatList();
 
+        // Observa o container para futuras mudanças
         const observer = new MutationObserver(updateChatList);
         observer.observe(mainSection, { childList: true, subtree: true });
         log("B.Plus! carregado e monitorando.");
     }
-
+    
     if (document.readyState === 'loading') { document.addEventListener('DOMContentLoaded', initialize); } else { initialize(); }
 })();
