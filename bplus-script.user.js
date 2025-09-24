@@ -1,400 +1,555 @@
 // ==UserScript==
-// @name         B.PLUS
+// @name         B.Plus! - Contador de Atendimentos & Melhorias Beemore
 // @namespace    http://tampermonkey.net/
-// @version      20.0.0 // Adiciona botão Expandir/Recolher, reintroduz notificação e botão de serviço incorreto.
-// @description  Versão completa com todas as funcionalidades: Agrupamentos, filtragem, notificação, alerta de serviço e botão para expandir/recolher todos os grupos.
+// @version      8.9.1
+// @description  Implementa uma nova interface de lista de chats ("Máscara") para total controle visual, garantindo barra de rolagem funcional e modo compacto estável.
 // @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
+// @grant        GM_xmlhttpRequest
 // @grant        GM_addStyle
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_info
+// @connect      10.1.11.15
+// @connect      est015
 // ==/UserScript==
 
 (function() {
     'use strict';
 
     // --- CONFIGURAÇÕES GERAIS ---
-    const CONFIG = {
-        SCRIPT_VERSION: GM_info.script.version || '15.0.9',
-        UPDATE_DEBOUNCE_MS: 300,
-        STABILIZATION_DELAY_MS: 1500,
+    const SCRIPT_VERSION = GM_info.script.version || '8.9';
+    const IDLE_REFRESH_SECONDS = 90; // Tempo em segundos para o auto-refresh
+    const MAX_GROUP_HEIGHT_ITEMS = 6; // Máximo de chats visíveis por grupo antes da rolagem
+    const API_URL = 'http://10.1.11.15/contador/api.php';
+    const CATEGORY_COLORS = {
+        'Suporte - PDV': '#E57373', 'Suporte - Retaguarda': '#64B5F6', 'Suporte - Fiscal': '#81C784',
+        'Suporte - Web': '#FFD54F', 'Suporte - Mobile': '#FFB74D',
+        'Sem Categoria': '#9575CD', // Roxo para chats sem categoria (ex: WhatsApp)
+        'default': '#BDBDBD'
     };
+    const SPINNER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="crx-spinner"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg>`;
+    const REFRESH_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>`;
+    const COMPACT_VIEW_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg>`;
 
-    // --- ÍCONES SVG ---
-    const ICONS = {
-        USER: `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"></path></svg>`,
-        LAYOUT: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>`,
-        CHEVRON: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg>`,
-        WARNING: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"></path></svg>`,
-        EXPAND_COLLAPSE: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path></svg>`
-    };
 
-    // --- SELETORES DE DOM ---
-    const SELECTORS = {
-        mainContainer: 'app-chat-list-container > section',
-        allChatItems: 'app-chat-list-item, app-queue-item',
-        unreadCountBadge: 'div[class*="bg-red-600"]',
-        serviceWarningIcon: 'app-icon[icon="tablerExclamationCircle"]'
-    };
+    // --- VARIÁVEIS DE ESTADO ---
+    let idleTimer; // Variável para o timer de inatividade
+    let isAutoRefreshing = false; // Flag para controlar o processo de auto-refresh
+    let isCompactMode = GM_getValue('compactMode', false); // Estado do modo compacto
 
-    // --- ESTADO DA APLICAÇÃO ---
-    const STATE = {
-        activeFilter: 'Todos',
-        activeLayout: GM_getValue('activeLayout', 'tabs'),
-        collapsedGroups: new Set(JSON.parse(GM_getValue('collapsedGroups', '[]'))),
-        isInitialized: false,
-    };
-
-    // Referência global para o observador para que possamos pausá-lo
-    let mainObserver = null;
-
-    // =================================================================================
-    // FUNÇÕES UTILITÁRIAS
-    // =================================================================================
-    const log = (message) => console.log(`[B.Plus! v${CONFIG.SCRIPT_VERSION}] ${message}`);
-    const debounce = (func, delay) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => func.apply(this, a), delay); }; };
-    const makeSafeForCSS = (name) => name.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase();
-    const hexToRgba = (hex, alpha) => {
-        let r=0,g=0,b=0;
-        if(hex.length==4){r=parseInt(hex[1]+hex[1],16);g=parseInt(hex[2]+hex[2],16);b=parseInt(hex[3]+hex[3],16);}
-        else if(hex.length==7){r=parseInt(hex.substring(1,3),16);g=parseInt(hex.substring(3,5),16);b=parseInt(hex.substring(5,7),16);}
-        return `rgba(${r},${g},${b},${alpha})`;
-    };
-    const waitForElement = (selector) => new Promise(resolve => {
-        const check = () => {
-            const el = document.querySelector(selector);
-            if (el) {
-                if (observer) observer.disconnect();
-                resolve(el);
-            }
-        };
-        const observer = new MutationObserver(check);
-        check();
-        observer.observe(document.body, { childList: true, subtree: true });
-    });
+    // Função auxiliar para converter HEX para RGBA
+    function hexToRgba(hex, alpha) {
+        let r = 0, g = 0, b = 0;
+        if (hex.length == 4) { // #RGB
+            r = "0x" + hex[1] + hex[1]; g = "0x" + hex[2] + hex[2]; b = "0x" + hex[3] + hex[3];
+        } else if (hex.length == 7) { // #RRGGBB
+            r = "0x" + hex[1] + hex[2]; g = "0x" + hex[3] + hex[4]; b = "0x" + hex[5] + hex[6];
+        }
+        return `rgba(${+r},${+g},${+b},${alpha})`;
+    }
 
     // =================================================================================
     // INJEÇÃO DE ESTILOS
     // =================================================================================
-    function injectStyles() {
+    function injetarEstilos() {
         if (document.getElementById('bplus-custom-styles')) return;
-        const CATEGORY_COLORS = {
-            'Suporte - Web': '#3498db', 'Suporte - PDV': '#2ecc71', 'Suporte - Retaguarda': '#f39c12',
-            'Suporte - Fiscal': '#e74c3c', 'Suporte - Mobile': '#9b59b6', 'Sem Categoria': '#95a5a6'
-        };
-        let dynamicStyles = Object.entries(CATEGORY_COLORS).map(([category, color]) => {
-            const safeCategory = makeSafeForCSS(category);
-            return `
-                .crx-filter-tab[data-filter="${category}"].active { background-color: ${color} !important; color: white !important; }
-                .crx-item-bg-${safeCategory} { border-left-color: ${color} !important; background-color: ${hexToRgba(color, 0.08)} !important; }
-                .dark .crx-item-bg-${safeCategory} { background-color: ${hexToRgba(color, 0.15)} !important; }
+        let styles = '';
+        for (const category in CATEGORY_COLORS) {
+            const safeCategory = category.replace(/[\s-]+/g, '-').toLowerCase();
+            const color = CATEGORY_COLORS[category];
+            styles += `
+                .crx-category-${safeCategory} { border-left: 5px solid ${color} !important; }
+                .crx-category-${safeCategory}.crx-chat-highlight { background-color: ${hexToRgba(color, 0.2)} !important; }
+                .dark .crx-category-${safeCategory}.crx-chat-highlight { background-color: ${hexToRgba(color, 0.25)} !important; }
+                .crx-group-header-${safeCategory} { background-color: ${color} !important; }
             `;
-        }).join('');
+        }
         GM_addStyle(`
-            #bplus-custom-styles{display:none}
-            body.bplus-active app-chat-list-container > section > :is(app-chat-list, app-queue-list) { display: none !important; }
-            #crx-main-container{display:flex;flex-direction:column;height:100%;overflow:hidden}
-            .crx-layout-tabs #crx-list-layout-container,.crx-layout-list #crx-tabs-layout-container{display:none}
-            .crx-controls-container{display:flex;justify-content:flex-end;gap:4px;padding:4px 8px;background-color:var(--primary-100,#fff);border-bottom:1px solid var(--border-color,#e0e0e0)}
-            .dark .crx-controls-container{background-color:var(--primary-700,#252535);border-bottom-color:var(--border-dark,#3e374e)}
-            #crx-layout-toggle, #crx-expand-toggle {background:0 0;border:none;color:var(--text-color-secondary,#666);cursor:pointer;padding:6px;border-radius:4px;transition:background-color .2s}
-            #crx-layout-toggle:hover, #crx-expand-toggle:hover {background-color:var(--primary-200,#eee)}
-            .dark #crx-layout-toggle, .dark #crx-expand-toggle {color:var(--text-color-dark-secondary,#aaa)}
-            .dark #crx-layout-toggle:hover, .dark #crx-expand-toggle:hover {background-color:var(--primary-600,#3e374e)}
-            .crx-filter-tabs{display:flex;flex-shrink:0;overflow-x:auto;overflow-y:hidden;height:48px;align-items:center;padding:0 8px;background-color:var(--primary-100,#fff);border-bottom:1px solid var(--border-color,#e0e0e0)}
-            .dark .crx-filter-tabs{background-color:var(--primary-700,#252535);border-bottom-color:var(--border-dark,#3e374e)}
-            .crx-filter-tab{padding:8px 12px;margin:0 4px;border-radius:6px;font-size:13px;font-weight:500;color:var(--text-color-secondary,#666);cursor:pointer;white-space:nowrap;transition:all .2s}
-            .dark .crx-filter-tab{color:var(--text-color-dark-secondary,#aaa)}
-            .crx-filter-tab.active{font-weight:600}
-            .crx-filter-tab .count{background-color:var(--primary-200,#e0e0e0);color:var(--text-color-tertiary,#555);border-radius:10px;padding:1px 6px;font-size:11px;margin-left:6px}
-            .dark .crx-filter-tab .count{background-color:var(--primary-600,#3e374e);color:var(--text-color-dark-tertiary,#ccc)}
-            .crx-group-header{display:flex;align-items:center;justify-content:space-between;padding:12px 12px 4px;font-size:13px;font-weight:600;color:var(--text-color-secondary,#6c757d);text-transform:uppercase;position:sticky;top:0;background:inherit;z-index:10;cursor:pointer;user-select:none;border-bottom:1px solid var(--border-color,#e0e0e0)}
-            .dark .crx-group-header{color:var(--text-color-dark-secondary,#a0a0b0);border-bottom-color:var(--border-dark,#3e374e)}
-            .crx-group-header.group-waiting{color:#e67e22}.dark .crx-group-header.group-waiting{color:#f39c12}
-            .crx-group-header .crx-chevron{transition:transform .2s ease-in-out}
-            .crx-group-header.collapsed .crx-chevron{transform:rotate(-90deg)}
-            .crx-chat-group-items.collapsed{display:none}
-            .crx-chat-list-container{flex-grow:1;overflow-y:auto;background-color:var(--primary-100,#fff)}
-            .dark .crx-chat-list-container{background-color:var(--primary-700,#252535)}
-            .crx-tg-item{position: relative; display:flex;align-items:center;padding:8px 12px;border-bottom:1px solid var(--border-color,#f0f0f0);cursor:pointer;border-left:5px solid transparent;transition:background-color .15s}
-            .dark .crx-tg-item{border-bottom-color:var(--border-dark,#3e374e)}
-            .crx-tg-item.active{background-color:var(--primary-color,#5e47d0)!important;color:#fff;border-left-color:var(--primary-color,#5e47d0)!important}
-            .crx-tg-item.active .crx-tg-avatar,.crx-tg-item.active .crx-tg-subtitle,.crx-tg-item.active .crx-tg-title{color:#fff!important}
-            .crx-tg-item.is-waiting{border-left-color:#ffa500!important;background-color:${hexToRgba('#FFA500',.08)}!important}
-            .dark .crx-tg-item.is-waiting{background-color:${hexToRgba('#FFA500',.18)}!important}
-            .crx-tg-item.is-alert{border-left-color:#e57373!important}
-            .crx-tg-avatar{flex-shrink:0;width:32px;height:32px;display:flex;align-items:center;justify-content:center;border-radius:50%;background-color:var(--primary-200,#e0e0e0);color:var(--text-color-tertiary,#555)}
-            .dark .crx-tg-avatar{background-color:var(--primary-600,#3e374e);color:var(--text-color-dark-tertiary,#ccc)}
-            .crx-tg-avatar svg{width:20px;height:20px}
-            .crx-tg-content{flex-grow:1;min-width:0;margin-left:8px}
-            .crx-tg-title{font-weight:500;font-size:14px;color:var(--text-color-primary,#333);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-            .dark .crx-tg-title{color:var(--text-color-dark-primary,#f0f0f0)}
-            .crx-tg-subtitle{display:flex;align-items:center;font-size:11px;color:var(--text-color-tertiary,#777);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
-            .dark .crx-tg-subtitle{color:var(--text-color-dark-tertiary,#b0b0b0)}
-            .crx-tg-subtitle > span:first-child { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-            .crx-tg-meta { display: flex; flex-direction: column; align-items: flex-end; justify-content: flex-start; margin-left: 8px; flex-shrink: 0; height: 100%; padding-top: 2px;}
-            .crx-unread-badge { display: block; background-color: #ef4444; color: white; font-size: 10px; font-weight: 600; border-radius: 9999px; min-width: 18px; height: 18px; padding: 2px 5px; text-align: center; line-height: 14px; }
-            .crx-service-warning-icon { display: inline-flex; align-items: center; justify-content: center; color: #f59e0b; margin-left: 4px; flex-shrink: 0; cursor: pointer; }
-            .crx-service-warning-icon svg { width: 14px; height: 14px; }
-            ${dynamicStyles}
+            #bplus-custom-styles { display: none; } /* Elemento marcador */
+
+            /* [NOVO v8.9] Esconde a lista original para dar lugar à nossa "Máscara" */
+            app-chat-list-container > section > app-chat-list { display: none !important; }
+
+            /* [NOVO v8.9] Container para nossa nova lista */
+            #crx-chat-list-mask { padding: 0 8px; }
+
+            /* [ATUALIZADO v8.9] Barra de Rolagem agora aplicada apenas aos nossos containers */
+            .crx-group-container {
+                max-height: calc(${MAX_GROUP_HEIGHT_ITEMS} * 72px); /* 72px = altura normal */
+                overflow-y: auto !important;
+                overflow-x: hidden !important;
+                padding-right: 5px;
+                transition: max-height 0.3s ease-in-out;
+            }
+            .crx-compact-view .crx-group-container {
+                max-height: calc(${MAX_GROUP_HEIGHT_ITEMS} * 40px); /* 40px = altura compacta */
+            }
+
+            /* Estilização da barra de rolagem */
+            .crx-group-container::-webkit-scrollbar { width: 6px; }
+            .crx-group-container::-webkit-scrollbar-track { background: transparent; }
+            .crx-group-container::-webkit-scrollbar-thumb { background-color: #ccc; border-radius: 10px; }
+            .dark .crx-group-container::-webkit-scrollbar-thumb { background-color: #4f4f5a; }
+
+            /* Estilos para o Modo Compacto */
+            .crx-compact-view app-chat-list-item { height: 40px !important; }
+            .crx-compact-view app-chat-list-item > section > div:first-of-type { display: flex; align-items: center; }
+            .crx-compact-view app-chat-list-item .flex.flex-col { display: none; } /* Oculta a segunda linha de texto */
+            .crx-control-btn.active { background-color: #e0e0e0; border-color: #adadad; }
+            .dark .crx-control-btn.active { background-color: #4a4a61; border-color: #6a627e; }
+
+            /* Animações e Destaques */
+            @keyframes crx-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+            .crx-spinner { animation: crx-spin 1s linear infinite; }
+            .crx-chat-aguardando { background-color: #FFDAB9 !important; border-left: 5px solid #FFA500 !important; }
+            .dark .crx-chat-aguardando { background-color: #5a4a3e !important; border-left-color: #ff8c00 !important; }
+
+            /* Ícone de Versão na Barra Lateral */
+            #crx-version-indicator-sidebar {
+                position: relative; cursor: help; width: 36px; height: 36px; border-radius: 6px;
+                display: flex; align-items: center; justify-content: center; color: #e1dbfb;
+                background-color: transparent; transition: background-color 0.15s ease-in-out; margin-bottom: 6px;
+            }
+            #crx-version-indicator-sidebar:hover { background-color: #5e47d0; }
+            #crx-version-indicator-sidebar .crx-tooltip {
+                visibility: hidden; width: 160px; background-color: #333; color: #fff; text-align: center;
+                border-radius: 6px; padding: 8px; position: absolute; z-index: 100;
+                left: 125%; top: 50%; transform: translateY(-50%); opacity: 0; transition: opacity 0.3s; line-height: 1.4;
+            }
+            #crx-version-indicator-sidebar:hover .crx-tooltip { visibility: visible; opacity: 1; }
+
+            /* Elementos da UI */
+            .crx-group-header {
+                display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem; font-weight: 600; color: white;
+                text-shadow: 1px 1px 2px rgba(0,0,0,0.4); padding: 6px 12px; border-radius: 4px; text-transform: uppercase;
+                margin-top: 10px; cursor: pointer; position: sticky; top: 0; z-index: 10;
+            }
+            .crx-group-header .crx-chevron { transition: transform 0.2s ease-in-out; }
+            .crx-group-header.collapsed .crx-chevron { transform: rotate(-90deg); }
+            #crx-header-btn {
+                background-color: #FB923C; color: white !important; border: 1px solid #F97316; padding: 0 12px; height: 32px;
+                border-radius: 0.25rem; cursor: pointer; font-weight: 500; margin-right: 8px; display: flex; align-items: center;
+            }
+            #crx-header-btn:hover { background-color: #F97316; border-color: #EA580C; }
+            .crx-control-btn { background-color: #ffffff; border: 1px solid #e5e7eb; color: #525252; transition: all 0.2s; display: flex; align-items: center; justify-content: center; height: 2rem; width: 2rem; border-radius: 0.25rem; cursor: pointer; margin-left: 8px; }
+            .dark .crx-control-btn { background-color: #37374a; border-color: #4c445c; color: #e1e1e1; }
+
+            /* Modal (Claro e Escuro) */
+            .crx-modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.6); z-index: 9998; display: flex; justify-content: center; align-items: center; }
+            .crx-modal-content { background-color: white; padding: 25px; border-radius: 8px; width: 350px; box-shadow: 0 5px 15px rgba(0,0,0,0.3); z-index: 9999; }
+            .dark .crx-modal-content { background-color: #2c2c3d; color: #e1e1e1; }
+            .crx-modal-content h3 { margin: 0 0 20px 0; color: #333; }
+            .dark .crx-modal-content h3 { color: #e1e1e1; }
+            .crx-form-group label { display: block; margin-bottom: 5px; font-weight: 500; color: #333; }
+            .dark .crx-form-group label { color: #e1e1e1; }
+            .crx-form-group input, .crx-form-group select { width: 100%; padding: 8px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; background-color: #fff !important; color: #000 !important; }
+            .dark .crx-form-group input, .dark .crx-form-group select { background-color: #3e374e !important; color: #e1e1e1 !important; border-color: #4c445c !important; }
+            .crx-btn { width: 100%; padding: 10px; background-color: #2c6fbb; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; }
+            #crx-status { margin-top: 15px; font-weight: bold; text-align: center; }
+
+            /* Estilos de Categoria */
+            ${styles}
         `);
     }
 
-    // =================================================================================
-    // LÓGICA DE DADOS E RENDERIZAÇÃO
-    // =================================================================================
-    function parseChatItemData(itemElement) {
-        let solicitante = 'Usuário Desconhecido';
-        let revenda = 'Sem Revenda';
-        let categoria = 'Sem Categoria';
 
-        const mainSection = itemElement.querySelector('section');
-        if (mainSection) {
-            const topDiv = mainSection.querySelector('div');
-            if (topDiv) {
-                solicitante = topDiv.querySelector('span.font-medium')?.innerText.trim() || solicitante;
-                categoria = topDiv.querySelector('span.shrink-0')?.innerText.trim() || categoria;
-            }
-            const revendaElement = topDiv?.nextElementSibling;
-            if (revendaElement && revendaElement.tagName === 'SPAN') {
-                const tempRevendaText = revendaElement.innerText.trim();
-                const waitingTextMatch = tempRevendaText.match(/Aguardando(\s\(.*\))?/);
-                let cleanedRevendaText = tempRevendaText;
-                if (waitingTextMatch) cleanedRevendaText = tempRevendaText.replace(waitingTextMatch[0], '').trim();
-                if (cleanedRevendaText) revenda = cleanedRevendaText;
+    // =================================================================================
+    // CAPTURA DE DADOS
+    // =================================================================================
+    function capturarDadosPagina() {
+        let analista = '', numero = '', solicitante = '', revenda = '', servicoSelecionado = '';
+
+        analista = document.querySelector('app-chat-list-container > header span.font-medium')?.innerText.trim() || '';
+
+        const chatHeaderElement = document.querySelector('app-chat-agent-header');
+        if (chatHeaderElement) {
+            const titleElement = chatHeaderElement.querySelector('div > span');
+            if(titleElement){
+                 const match = titleElement.innerText.match(/#(\d+)/);
+                 if(match) numero = match[1];
             }
         }
 
-        const unreadElement = itemElement.querySelector(SELECTORS.unreadCountBadge);
-        const unreadCount = unreadElement ? parseInt(unreadElement.innerText, 10) || 0 : 0;
+        const activeChatElement = document.querySelector('app-chat-list-item.active');
+        if (activeChatElement) {
+            solicitante = activeChatElement.querySelector('span.truncate.font-medium')?.innerText.trim() || '';
+            revenda = activeChatElement.querySelector('span.inline-flex > span.truncate')?.innerText.trim() || '';
+            servicoSelecionado = activeChatElement.querySelector('span.shrink-0')?.innerText.trim() || '';
+        }
 
-        const serviceWarningElement = itemElement.querySelector(SELECTORS.serviceWarningIcon);
-        const hasServiceWarning = !!serviceWarningElement;
-        const originalServiceWarningButton = hasServiceWarning ? serviceWarningElement.closest('button') : null;
-
-        const isWaiting = Array.from(itemElement.querySelectorAll('app-tag')).some(tag => tag.textContent?.toLowerCase().includes('aguardando'));
-        const isAlert = !isWaiting && !!itemElement.querySelector('app-icon[icon="tablerAlertCircle"]');
-
-        return {
-            solicitante, revenda, categoria, isWaiting, isAlert,
-            unreadCount, hasServiceWarning, originalServiceWarningButton,
-            isActive: itemElement.classList.contains('active'),
-            isMyChat: !!itemElement.closest('app-chat-list')?.querySelector('header span')?.textContent.includes('Meus chats'),
-            originalElement: itemElement,
-        };
+        return { analista, numero, revenda, solicitante, servicoSelecionado };
     }
 
-    function createAndAppendCustomItem(container, chatData) {
-        const item = document.createElement('div');
-        item.addEventListener('click', () => chatData.originalElement.click());
+    // =================================================================================
+    // FUNCIONALIDADE: REGISTRO DE SERVIÇO INCORRETO
+    // =================================================================================
+    function injetarBotaoRegistro() {
+        if (document.getElementById('crx-header-btn')) return;
+        const actionButtonsContainer = document.querySelector('app-chat-agent-header > div:last-of-type');
+        if (!actionButtonsContainer) return;
+        const referenceButton = actionButtonsContainer.querySelector('app-button[icon="tablerX"], app-button[text="Sair da conversa"]');
+        if (referenceButton) {
+            const ourButton = document.createElement('button');
+            ourButton.id = 'crx-header-btn';
+            ourButton.textContent = 'Serviço Incorreto';
+            ourButton.addEventListener('click', abrirModalRegistro);
+            referenceButton.parentElement.insertBefore(ourButton, referenceButton);
+        }
+    }
 
-        const safeCategory = makeSafeForCSS(chatData.categoria);
-        item.className = `crx-tg-item crx-item-bg-${safeCategory}`;
-        if(chatData.isActive) item.classList.add('active');
-        if(chatData.isAlert) item.classList.add('is-alert');
-        if(chatData.isWaiting) item.classList.add('is-waiting');
-        item.dataset.category = chatData.categoria;
+    function observarTags() {
+        const detailsPanel = document.querySelector('app-chat-aside');
+        if (!detailsPanel || detailsPanel.getAttribute('data-crx-observed')) return;
+        const observer = new MutationObserver(() => {
+            const tagElement = detailsPanel.querySelector('app-tag span[style*="text-overflow: ellipsis"]');
+            if (tagElement && tagElement.innerText.trim().toLowerCase() === 'servico-incorreto') {
+                 abrirModalRegistro();
+                 observer.disconnect();
+                 detailsPanel.removeAttribute('data-crx-observed');
+            }
+        });
+        observer.observe(detailsPanel, { childList: true, subtree: true });
+        detailsPanel.setAttribute('data-crx-observed', 'true');
+    }
 
-        item.innerHTML = `
-            <div class="crx-tg-avatar is-icon">${ICONS.USER}</div>
-            <div class="crx-tg-content">
-                <div class="crx-tg-title">${chatData.solicitante}</div>
-                <div class="crx-tg-subtitle">
-                    <span>${chatData.revenda}</span>
-                    <span class="crx-service-warning-icon" title="Serviço incorreto" style="display: none;"></span>
+    function abrirModalRegistro() {
+        if (document.getElementById('crx-modal')) return;
+        const data = capturarDadosPagina();
+        const modalHTML = `
+            <div id="crx-modal" class="crx-modal-overlay">
+                <div class="crx-modal-content">
+                    <h3>Registrar Atendimento Incorreto</h3>
+                    <form id="crx-atendimento-form">
+                        <input type="hidden" id="crx-analista" value="${data.analista}">
+                        <div class="crx-form-group"><label>Número</label><input type="text" id="crx-numero" value="${data.numero}" required></div>
+                        <div class="crx-form-group"><label>Revenda</label><input type="text" id="crx-revenda" value="${data.revenda}" required></div>
+                        <div class="crx-form-group"><label>Solicitante</label><input type="text" id="crx-solicitante" value="${data.solicitante}" required></div>
+                        <div class="crx-form-group">
+                            <label>Serviço Selecionado</label>
+                            <select id="crx-servico-selecionado" required>
+                                <option value="">Selecione...</option><option value="Suporte - Web">Suporte - Web</option><option value="Suporte - PDV">Suporte - PDV</option>
+                                <option value="Suporte - Retaguarda">Suporte - Retaguarda</option><option value="Suporte - Fiscal">Suporte - Fiscal</option><option value="Suporte - Mobile">Suporte - Mobile</option>
+                            </select>
+                        </div>
+                        <div class="crx-form-group">
+                            <label>Serviço Correto</label>
+                            <select id="crx-servico-correto" required>
+                                <option value="">Selecione...</option><option value="Suporte - Web">Suporte - Web</option><option value="Suporte - PDV">Suporte - PDV</option>
+                                <option value="Suporte - Retaguarda">Suporte - Retaguarda</option><option value="Suporte - Fiscal">Suporte - Fiscal</option><option value="Suporte - Mobile">Suporte - Mobile</option>
+                            </select>
+                        </div>
+                        <button type="submit" class="crx-btn">Salvar Atendimento</button>
+                        <div id="crx-status"></div>
+                    </form>
                 </div>
-            </div>
-            <div class="crx-tg-meta">
-                <span class="crx-unread-badge" style="display: none;"></span>
             </div>`;
-
-        const unreadBadge = item.querySelector('.crx-unread-badge');
-        if (chatData.unreadCount > 0) {
-            unreadBadge.textContent = chatData.unreadCount;
-            unreadBadge.style.display = 'block';
+        document.body.insertAdjacentHTML('beforeend', modalHTML);
+        if (document.body.classList.contains('dark')) {
+            document.querySelector('.crx-modal-content').classList.add('dark');
         }
-
-        const warningIcon = item.querySelector('.crx-service-warning-icon');
-        if (chatData.hasServiceWarning && chatData.originalServiceWarningButton) {
-            warningIcon.innerHTML = ICONS.WARNING;
-            warningIcon.style.display = 'inline-flex';
-            warningIcon.onclick = (e) => {
-                e.stopPropagation();
-                chatData.originalServiceWarningButton.click();
-            };
+        const servicoSelect = document.getElementById('crx-servico-selecionado');
+        for (let option of servicoSelect.options) {
+            if (option.text === data.servicoSelecionado) { option.selected = true; break; }
         }
-        container.appendChild(item);
-    }
-
-    // Wrapper debounced que contém a lógica de desconexão/reconexão
-    const debouncedRebuild = debounce(() => {
-        if (mainObserver) mainObserver.disconnect(); // PAUSA o observador
-
-        rebuildAndRenderUI(); // Executa a lógica de redesenho
-
-        const mainSection = document.querySelector(SELECTORS.mainContainer);
-        if (mainObserver && mainSection) { // RECONECTA o observador
-            mainObserver.observe(mainSection, { childList: true, subtree: true });
-        }
-    }, CONFIG.UPDATE_DEBOUNCE_MS);
-
-    function rebuildAndRenderUI() {
-        const mainContainer = document.getElementById('crx-main-container');
-        if (!mainContainer) return;
-
-        mainContainer.className = 'crx-layout-' + STATE.activeLayout;
-        const allOriginalItems = Array.from(document.querySelectorAll(SELECTORS.allChatItems));
-        const allChatsData = allOriginalItems.map(parseChatItemData);
-
-        const sortFn = (a, b) => (b.isAlert - a.isAlert) || (b.isWaiting - a.isWaiting);
-        const waitingChats = allChatsData.filter(c => c.isWaiting).sort(sortFn);
-        const remaining = allChatsData.filter(c => !c.isWaiting);
-        const myChats = remaining.filter(c => c.isMyChat).sort(sortFn);
-        const otherChats = remaining.filter(c => !c.isMyChat).sort(sortFn);
-
-        if (STATE.activeLayout === 'tabs') {
-            updateTabsLayout(waitingChats, myChats, otherChats);
-        } else {
-            updateListLayout(waitingChats, myChats, otherChats);
-        }
-    }
-
-    function updateTabsLayout(waiting, my, other) {
-        let container = document.getElementById('crx-tabs-layout-container');
-        if(!container) return;
-        const allChats = [...waiting, ...my, ...other];
-        const counts = allChats.reduce((a, c) => (a.set(c.categoria, (a.get(c.categoria) || 0) + 1), a), new Map());
-        let tabsHtml = `<div class="crx-filter-tab ${STATE.activeFilter === 'Todos' ? 'active' : ''}" data-filter="Todos">Todos <span class="count">${allChats.length}</span></div>` +
-                       [...counts.entries()].sort().map(([cat, cnt]) => `<div class="crx-filter-tab ${STATE.activeFilter === cat ? 'active' : ''}" data-filter="${cat}">${cat.replace('Suporte - ','')} <span class="count">${cnt}</span></div>`).join('');
-        const tabsContainer = container.querySelector('.crx-filter-tabs');
-        if (tabsContainer) tabsContainer.innerHTML = tabsHtml;
-        const listContainer = container.querySelector('.crx-chat-list-container');
-        if (listContainer) {
-            listContainer.innerHTML = '';
-            appendGroupsToContainer(listContainer, waiting, my, other);
-            applyChatFilter();
-        }
-        tabsContainer.querySelectorAll('.crx-filter-tab').forEach(t => t.onclick = (e) => {
-            STATE.activeFilter = e.currentTarget.dataset.filter;
-            rebuildAndRenderUI();
+        document.getElementById('crx-atendimento-form').addEventListener('submit', lidarComSubmitFormulario);
+        document.getElementById('crx-modal').addEventListener('click', (e) => {
+            if (e.target === e.currentTarget) fecharModalRegistro();
         });
     }
 
-    function updateListLayout(waiting, my, other) {
-        let listContainer = document.getElementById('crx-list-layout-container');
-        if(!listContainer) return;
-        listContainer.innerHTML = '';
-        appendGroupsToContainer(listContainer, waiting, my, other);
+    function fecharModalRegistro() {
+        const modal = document.getElementById('crx-modal');
+        if (modal) modal.remove();
     }
 
-    function appendGroupsToContainer(container, waiting, my, other) {
-        appendGroup(container, "Aguardando Atendimento", waiting, "group_waiting");
-        appendGroup(container, "Meus Chats", my, "group_mychats");
-        const grouped = other.reduce((a, c) => ((a[c.categoria] = a[c.categoria] || []).push(c), a), {});
-        Object.keys(grouped).sort().forEach(cat => appendGroup(container, cat, grouped[cat], `group_${makeSafeForCSS(cat)}`));
-    }
-
-    function appendGroup(container, title, chats, groupKey) {
-        if (chats.length === 0) return;
-        const isCollapsed = STATE.collapsedGroups.has(groupKey);
-        const header = document.createElement('div');
-        header.className = `crx-group-header ${isCollapsed ? 'collapsed' : ''}`;
-        header.dataset.groupKey = groupKey;
-        header.dataset.originalTitle = title;
-        if (groupKey === 'group_waiting') header.classList.add('group-waiting');
-        header.innerHTML = `<span>${title} (${chats.length})</span><span class="crx-chevron">${ICONS.CHEVRON}</span>`;
-        const itemsContainer = document.createElement('div');
-        itemsContainer.className = `crx-chat-group-items ${isCollapsed ? 'collapsed' : ''}`;
-        chats.forEach(chatData => createAndAppendCustomItem(itemsContainer, chatData));
-        header.addEventListener('click', () => {
-            STATE.collapsedGroups.has(groupKey) ? STATE.collapsedGroups.delete(groupKey) : STATE.collapsedGroups.add(groupKey);
-            GM_setValue('collapsedGroups', JSON.stringify(Array.from(STATE.collapsedGroups)));
-            header.classList.toggle('collapsed');
-            itemsContainer.classList.toggle('collapsed');
-        });
-        container.append(header, itemsContainer);
-    }
-
-    function applyChatFilter() {
-        const listContainer = document.querySelector('#crx-tabs-layout-container .crx-chat-list-container');
-        if (!listContainer) return;
-        listContainer.querySelectorAll('.crx-group-header').forEach(header => {
-            const itemsContainer = header.nextElementSibling;
-            if (!itemsContainer) return;
-            let visibleItemsCount = 0;
-            Array.from(itemsContainer.children).forEach(item => {
-                const isVisible = STATE.activeFilter === 'Todos' || item.dataset.category === STATE.activeFilter;
-                item.style.display = isVisible ? '' : 'none';
-                if (isVisible) visibleItemsCount++;
-            });
-            header.style.display = visibleItemsCount > 0 ? '' : 'none';
-            header.querySelector('span:first-child').textContent = `${header.dataset.originalTitle} (${visibleItemsCount})`;
+    function lidarComSubmitFormulario(e) {
+        e.preventDefault();
+        const statusDiv = document.getElementById('crx-status');
+        const atendimentoData = {
+            action: 'create', numero: document.getElementById('crx-numero').value,
+            revenda: document.getElementById('crx-revenda').value, solicitante: document.getElementById('crx-solicitante').value,
+            servicoSelecionado: document.getElementById('crx-servico-selecionado').value, servicoCorreto: document.getElementById('crx-servico-correto').value,
+            data: new Date().toISOString().split('T')[0], analista: document.getElementById('crx-analista').value
+        };
+        statusDiv.textContent = 'Salvando...';
+        GM_xmlhttpRequest({
+            method: 'POST', url: API_URL, headers: { 'Content-Type': 'application/json' }, data: JSON.stringify(atendimentoData),
+            onload: function(response) {
+                try {
+                    const result = JSON.parse(response.responseText);
+                    statusDiv.textContent = result.success || `Falha: ${result.error || 'Erro desconhecido'}`;
+                    statusDiv.style.color = result.success ? 'green' : 'red';
+                    if (result.success) setTimeout(fecharModalRegistro, 1500);
+                } catch (err) { statusDiv.textContent = 'Erro ao processar resposta da API.'; statusDiv.style.color = 'red'; }
+            },
+            onerror: function() { statusDiv.textContent = 'Falha de conexão com a API.'; statusDiv.style.color = 'red'; }
         });
     }
 
     // =================================================================================
-    // INICIALIZAÇÃO
+    // FUNCIONALIDADE: MELHORIAS DE INTERFACE E AUTO-REFRESH
     // =================================================================================
-    async function initialize() {
-        if (STATE.isInitialized) return;
-        log("Aguardando o container principal do chat...");
-        const mainSection = await waitForElement(SELECTORS.mainContainer);
+    function toggleCompactMode() {
+        isCompactMode = !isCompactMode;
+        GM_setValue('compactMode', isCompactMode);
+        document.body.classList.toggle('crx-compact-view', isCompactMode);
+        const compactBtn = document.getElementById('crx-compact-toggle');
+        if(compactBtn) {
+            compactBtn.classList.toggle('active', isCompactMode);
+        }
+    }
 
-        log("Container detectado. Aguardando estabilização da aplicação Beemore...");
-        setTimeout(() => {
-            log("Estabilização concluída. Iniciando a UI do B.Plus!.");
-
-            STATE.isInitialized = true;
-            injectStyles();
-
-            let shell = document.getElementById('crx-main-container');
-            if (!shell) {
-                shell = document.createElement('div');
-                shell.id = 'crx-main-container';
-                shell.innerHTML = `
-                    <div class="crx-controls-container">
-                        <button id="crx-expand-toggle" title="Expandir/Recolher Todos">${ICONS.EXPAND_COLLAPSE}</button>
-                        <button id="crx-layout-toggle" title="Alternar Layout">${ICONS.LAYOUT}</button>
-                    </div>
-                    <div id="crx-tabs-layout-container">
-                        <div class="crx-filter-tabs"></div>
-                        <div class="crx-chat-list-container"></div>
-                    </div>
-                    <div id="crx-list-layout-container" class="crx-chat-list-container"></div>`;
-                mainSection.appendChild(shell);
-
-                document.getElementById('crx-layout-toggle').addEventListener('click', () => {
-                    STATE.activeLayout = (STATE.activeLayout === 'tabs') ? 'list' : 'tabs';
-                    GM_setValue('activeLayout', STATE.activeLayout);
-                    rebuildAndRenderUI();
-                });
-
-                document.getElementById('crx-expand-toggle').addEventListener('click', () => {
-                    const allGroupKeys = Array.from(document.querySelectorAll('.crx-group-header')).map(h => h.dataset.groupKey);
-                    // Se algum grupo estiver recolhido (size > 0), a ação é expandir todos.
-                    // Caso contrário (size === 0), a ação é recolher todos.
-                    if (STATE.collapsedGroups.size > 0) {
-                        STATE.collapsedGroups.clear();
-                    } else {
-                        allGroupKeys.forEach(key => STATE.collapsedGroups.add(key));
-                    }
-                    GM_setValue('collapsedGroups', JSON.stringify(Array.from(STATE.collapsedGroups)));
-                    rebuildAndRenderUI(); // Força a atualização visual
-                });
+    function adicionarControles(container) {
+        if (!document.getElementById('crx-compact-toggle')) {
+            const compactBtn = document.createElement('button');
+            compactBtn.id = 'crx-compact-toggle';
+            compactBtn.className = 'crx-control-btn';
+            compactBtn.title = 'Alternar visualização compacta';
+            compactBtn.innerHTML = COMPACT_VIEW_SVG;
+            compactBtn.onclick = toggleCompactMode;
+            if (isCompactMode) {
+                compactBtn.classList.add('active');
             }
-
-            document.body.classList.add('bplus-active');
-
-            // Cria e inicia o observador global
-            mainObserver = new MutationObserver(debouncedRebuild);
-            mainObserver.observe(mainSection, { childList: true, subtree: true });
-
-            rebuildAndRenderUI(); // Primeira execução
-            log("B.Plus! carregado e monitorando.");
-
-        }, CONFIG.STABILIZATION_DELAY_MS);
+            container.appendChild(compactBtn);
+        }
     }
 
-    initialize();
+    function atualizarListasDeChat(isAutoRefresh = false) {
+        const dashboardButton = document.querySelector('div[data-sidebar-option="dashboard"]');
+        const sidebarChatButton = document.querySelector('div[data-sidebar-option="entities.chat"]');
+
+        if (!dashboardButton || !sidebarChatButton) {
+            if (!isAutoRefresh) console.log('B.Plus!: Botões de navegação (Dashboard/Chat) não encontrados.');
+            return;
+        }
+
+        if (isAutoRefreshing) {
+             console.log('B.Plus!: Atualização já em andamento.');
+             return;
+        }
+
+        isAutoRefreshing = true;
+        const versionIndicator = document.getElementById('crx-version-indicator-sidebar');
+        if (versionIndicator) {
+             versionIndicator.innerHTML = `${SPINNER_SVG} <span class="crx-tooltip">B.Plus! v${SCRIPT_VERSION}<br>Atualizando...</span>`;
+        }
+
+        dashboardButton.click();
+        setTimeout(() => {
+            sidebarChatButton.click();
+            setTimeout(() => {
+                if (versionIndicator) {
+                    versionIndicator.innerHTML = `B+ <span class="crx-tooltip">B.Plus! v${SCRIPT_VERSION}<br>Status: Operacional</span>`;
+                }
+                isAutoRefreshing = false;
+            }, 1500); // Tempo para a UI do chat recarregar
+        }, 400); // Tempo para a UI do dashboard carregar
+    }
+
+    function performSmartRefresh() {
+        if (!window.location.href.includes('/chat')) {
+            resetIdleTimer();
+            return;
+        }
+
+        console.log("B.Plus!: Verificando condições para auto-refresh...");
+        const isChatOpen = !!document.querySelector('app-chat-agent-header');
+        const isTyping = !!document.querySelector('textarea:focus, input:focus');
+
+        if (document.hidden || isChatOpen || isTyping) {
+            console.log("B.Plus!: Auto-refresh cancelado (janela inativa, chat aberto ou digitando).");
+            resetIdleTimer();
+            return;
+        }
+
+        console.log("B.Plus!: Executando auto-refresh...");
+        atualizarListasDeChat(true);
+        resetIdleTimer();
+    }
+
+    function resetIdleTimer() {
+        clearTimeout(idleTimer);
+        idleTimer = setTimeout(performSmartRefresh, IDLE_REFRESH_SECONDS * 1000);
+    }
+
+    function aplicarDestaquesECores() {
+        document.querySelectorAll('app-chat-list-item').forEach(item => {
+            item.className = item.className.replace(/\bcrx-category-\S+/g, '');
+            item.classList.remove('crx-chat-highlight', 'crx-chat-aguardando');
+
+            const hasAlert = !!item.querySelector('app-icon[icon="tablerAlertCircle"]');
+            const isAguardando = !!item.querySelector('span[class*="text-orange"]');
+            const categoryElement = item.querySelector('section > div:first-of-type > span:last-of-type');
+            const category = categoryElement ? categoryElement.textContent.trim() : 'Sem Categoria';
+            const categoryClass = `crx-category-${category.replace(/[\s-]+/g, '-').toLowerCase()}`;
+
+            item.classList.add(categoryClass);
+            item.classList.toggle('crx-chat-highlight', hasAlert && !isAguardando);
+            item.classList.toggle('crx-chat-aguardando', isAguardando);
+        });
+    }
+
+    /**
+     * [NOVO v8.9] Lógica de agrupamento e renderização da "Máscara".
+     * Esta função lê os chats da DOM original (que está escondida via CSS),
+     * e recria a lista dentro do nosso próprio container para controle total.
+     */
+    function agruparEOrdenarChats() {
+        const originalContainer = document.querySelector('app-chat-list-container > section');
+        if (!originalContainer) return;
+
+        // 1. Encontra ou cria nosso container customizado ("a máscara")
+        let crxMask = document.getElementById('crx-chat-list-mask');
+        if (!crxMask) {
+            crxMask = document.createElement('div');
+            crxMask.id = 'crx-chat-list-mask';
+            originalContainer.appendChild(crxMask);
+        }
+
+        const getCategory = (item) => {
+            const el = item.querySelector('section > div:first-of-type > span:last-of-type');
+            return el?.textContent.trim() || 'Sem Categoria';
+        };
+
+        // 2. Preserva o estado de recolhimento dos grupos antes de limpar
+        const collapsedGroups = new Set();
+        crxMask.querySelectorAll('.crx-group-header.collapsed').forEach(header => {
+            const categoryName = header.querySelector('span:first-child').textContent.split(' [')[0];
+            collapsedGroups.add(categoryName);
+        });
+
+        // 3. Lê todos os chats das listas originais (escondidas)
+        const allOriginalLists = Array.from(originalContainer.querySelectorAll('app-chat-list'));
+        const myChatsList = allOriginalLists.find(list => list.querySelector('header > div > span')?.textContent.trim() === 'Meus chats');
+        const othersList = allOriginalLists.find(list => list.querySelector('header > div > span')?.textContent.trim() === 'Outros');
+
+        const myChatsItems = myChatsList ? Array.from(myChatsList.querySelectorAll('app-chat-list-item')) : [];
+        const otherChatsItems = othersList ? Array.from(othersList.querySelectorAll('app-chat-list-item')) : [];
+
+        // 4. Limpa nosso container para redesenhar
+        crxMask.innerHTML = '';
+
+        // 5. Renderiza "Meus Chats" (sempre visível, com rolagem interna)
+        if (myChatsItems.length > 0) {
+            const header = document.createElement('div');
+            header.className = 'crx-group-header';
+            header.style.backgroundColor = '#6c757d'; // Cinza neutro
+            header.style.cursor = 'default';
+            header.innerHTML = `<span>Meus Chats [${myChatsItems.length}]</span>`;
+            crxMask.appendChild(header);
+
+            const groupContainer = document.createElement('div');
+            groupContainer.className = 'crx-group-container';
+            myChatsItems.forEach(item => groupContainer.appendChild(item.cloneNode(true)));
+            crxMask.appendChild(groupContainer);
+        }
+
+        // 6. Agrupa, ordena e renderiza os outros chats
+        const groups = new Map();
+        otherChatsItems.forEach(item => {
+            const category = getCategory(item);
+            if (!groups.has(category)) groups.set(category, []);
+            groups.get(category).push(item);
+        });
+
+        const sortedGroups = new Map([...groups.entries()].sort());
+
+        sortedGroups.forEach((groupItems, category) => {
+            if (groupItems.length === 0) return;
+
+            const safeCategory = category.replace(/[\s-]+/g, '-').toLowerCase();
+            const isCollapsed = collapsedGroups.has(category);
+            const header = document.createElement('div');
+            header.className = `crx-group-header crx-group-header-${safeCategory} ${isCollapsed ? 'collapsed' : ''}`;
+            header.innerHTML = `
+                <span>${category} [${groupItems.length}]</span>
+                <span class="crx-chevron">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                </span>`;
+
+            const groupContainer = document.createElement('div');
+            groupContainer.className = 'crx-group-container';
+            const itemHeight = isCompactMode ? 40 : 72;
+            const totalHeight = groupItems.length * itemHeight;
+
+            header.onclick = () => {
+                const wasCollapsed = header.classList.toggle('collapsed');
+                groupContainer.style.maxHeight = wasCollapsed ? '0px' : `${totalHeight}px`;
+            };
+
+            crxMask.appendChild(header);
+            crxMask.appendChild(groupContainer);
+            groupContainer.style.maxHeight = isCollapsed ? '0px' : `${totalHeight}px`;
+
+            groupItems.sort((a, b) => {
+                const aP = a.classList.contains('crx-chat-highlight') ? 3 : (a.classList.contains('crx-chat-aguardando') ? 2 : 1);
+                const bP = b.classList.contains('crx-chat-highlight') ? 3 : (b.classList.contains('crx-chat-aguardando') ? 2 : 1);
+                return bP - aP;
+            });
+
+            groupItems.forEach(item => groupContainer.appendChild(item.cloneNode(true)));
+        });
+    }
+
+    function injetarIndicadorDeVersao() {
+        if (document.getElementById('crx-version-indicator-sidebar')) return;
+        const helpButton = document.querySelector('div[data-sidebar-option="help"]');
+        if (helpButton && helpButton.parentElement) {
+            const indicator = document.createElement('div');
+            indicator.id = 'crx-version-indicator-sidebar';
+            indicator.innerHTML = `B+ <span class="crx-tooltip">B.Plus! v${SCRIPT_VERSION}<br>Status: Operacional</span>`;
+            helpButton.parentElement.insertBefore(indicator, helpButton);
+        }
+    }
+
+    // =================================================================================
+    // LOOP PRINCIPAL E INICIALIZAÇÃO
+    // =================================================================================
+    let mainInterval;
+
+    function aplicarCustomizacoes() {
+        // Primeiro, aplica classes aos itens originais para que os clones as herdem
+        aplicarDestaquesECores();
+
+        // Em seguida, redesenha nossa lista customizada
+        agruparEOrdenarChats();
+
+        // Por fim, injeta elementos na interface de chat ativo
+        if (document.querySelector('app-chat-agent-header')) {
+            injetarBotaoRegistro();
+            observarTags();
+        }
+    }
+
+    function inicializar() {
+        injetarEstilos();
+
+        if (isCompactMode) {
+            document.body.classList.add('crx-compact-view');
+        }
+
+        const observer = new MutationObserver(() => {
+            const targetContainer = document.querySelector('app-chat-list-container > div.flex.items-center');
+            if (targetContainer) {
+                adicionarControles(targetContainer);
+            }
+            injetarIndicadorDeVersao();
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+
+        window.addEventListener('mousemove', resetIdleTimer, { passive: true });
+        window.addEventListener('keypress', resetIdleTimer, { passive: true });
+        window.addEventListener('click', resetIdleTimer, { passive: true });
+        resetIdleTimer();
+
+        if (mainInterval) clearInterval(mainInterval);
+        mainInterval = setInterval(aplicarCustomizacoes, 1500);
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', inicializar);
+    } else {
+        inicializar();
+    }
 })();
