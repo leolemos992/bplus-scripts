@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         B.Plus! - Contador de Atendimentos & Melhorias Beemore
 // @namespace    http://tampermonkey.net/
-// @version      10.2.1-corrigido
-// @description  Lógica de contagem e filtragem corrigida. O contador 'Todos' agora inclui 'Meus Chats', e os filtros se aplicam a ambas as seções.
+// @version      9.9-atualizado
+// @description  Agrupamento por categoria na aba 'Todos' e correção para exibir chats 'Aguardando Atendimento', mantendo melhorias recentes.
 // @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
 // @grant        GM_xmlhttpRequest
@@ -18,14 +18,14 @@
     'use strict';
 
     // --- CONFIGURAÇÕES GERAIS ---
-    const SCRIPT_VERSION = GM_info.script.version || '10.2.1-corrigido';
+    const SCRIPT_VERSION = GM_info.script.version || '9.9-atualizado';
     const IDLE_REFRESH_SECONDS = 90;
     const API_URL = 'http://10.1.11.15/contador/api.php';
     const SPINNER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="crx-spinner"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg>`;
     const USER_ICON_SVG = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"></path></svg>`;
     const LAYOUT_ICON_SVG = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>`;
 
-    // --- CONFIGURAÇÕES DE UI v10.1 ---
+    // --- CONFIGURAÇÕES DE UI ---
     const CATEGORY_COLORS = {
         'Suporte - Web': '#3498db',
         'Suporte - PDV': '#2ecc71',
@@ -238,7 +238,7 @@
     }
 
     // =================================================================================
-    // CAPTURA DE DADOS E REGISTRO DE SERVIÇO (Sem alterações)
+    // CAPTURA DE DADOS E REGISTRO DE SERVIÇO
     // =================================================================================
     function capturarDadosPagina() {
         let analista = '', numero = '', solicitante = '', revenda = '', servicoSelecionado = '';
@@ -364,7 +364,7 @@
     }
 
     // =================================================================================
-    // AUTO-REFRESH E LÓGICA DE ATUALIZAÇÃO (Sem alterações)
+    // AUTO-REFRESH E LÓGICA DE ATUALIZAÇÃO
     // =================================================================================
     function atualizarListasDeChat(isAutoRefresh = false) {
         const dashboardButton = document.querySelector('div[data-sidebar-option="dashboard"]');
@@ -459,20 +459,18 @@
             </div>`;
     }
 
-    // A função renderTabsLayout foi a principal modificada para corrigir a contagem e filtragem
+    // *** FUNÇÃO ATUALIZADA COM A LÓGICA DE AGRUPAMENTO ***
     function renderTabsLayout(container, myChats, otherChats) {
         const layoutContainer = document.createElement('div');
         layoutContainer.id = 'crx-tabs-layout-container';
 
-        const allChats = [...myChats, ...otherChats]; // Combina todos os chats para contagem
+        const allChats = [...myChats, ...otherChats];
 
-        // **CORREÇÃO**: Contagem agora é feita em cima de TODOS os chats
         const categoryCounts = new Map();
         allChats.forEach(chat => {
             categoryCounts.set(chat.categoria, (categoryCounts.get(chat.categoria) || 0) + 1);
         });
 
-        // **CORREÇÃO**: A aba "Todos" agora mostra a contagem total correta
         let tabsHtml = `<div class="crx-filter-tab ${activeFilter === 'Todos' ? 'active' : ''}" data-filter="Todos">Todos <span class="count">${allChats.length}</span></div>`;
         for (const [category, count] of [...categoryCounts.entries()].sort()) {
             tabsHtml += `<div class="crx-filter-tab ${activeFilter === category ? 'active' : ''}" data-filter="${category}">${category.replace('Suporte - ','')} <span class="count">${count}</span></div>`;
@@ -485,30 +483,52 @@
         const chatListContainer = document.createElement('div');
         chatListContainer.className = 'crx-chat-list-container';
         let chatsHtml = '';
-        const isTodosActive = activeFilter === 'Todos';
 
-        // **CORREÇÃO**: "Meus Chats" agora também são filtrados pela aba ativa
+        // Renderiza "Meus Chats" (sempre no topo, se existirem e passarem no filtro)
         const filteredMyChats = myChats.filter(chat => activeFilter === 'Todos' || chat.categoria === activeFilter);
         if (filteredMyChats.length > 0) {
             chatsHtml += `<div class="crx-group-header">Meus Chats (${filteredMyChats.length})</div>`;
             filteredMyChats.sort((a, b) => (b.isAlert ? 2 : b.isWaiting ? 1 : 0) - (a.isAlert ? 2 : a.isWaiting ? 1 : 0))
-                   .forEach(chatData => { chatsHtml += createTelegramItemHtml(chatData, isTodosActive); });
+                   .forEach(chatData => {
+                        // Exibe a tag de categoria para 'Meus Chats' apenas na aba 'Todos'
+                        chatsHtml += createTelegramItemHtml(chatData, activeFilter === 'Todos');
+                   });
         }
 
-        // A filtragem dos outros chats já estava correta
         const filteredOtherChats = otherChats.filter(chat => activeFilter === 'Todos' || chat.categoria === activeFilter);
-        filteredOtherChats.sort((a, b) => (b.isAlert ? 2 : b.isWaiting ? 1 : 0) - (a.isAlert ? 2 : a.isWaiting ? 1 : 0))
-                     .forEach(chatData => { chatsHtml += createTelegramItemHtml(chatData, isTodosActive); });
+
+        // *** LÓGICA DE AGRUPAMENTO APLICADA AQUI ***
+        if (activeFilter === 'Todos') {
+            const groupedChats = filteredOtherChats.reduce((acc, chat) => {
+                (acc[chat.categoria] = acc[chat.categoria] || []).push(chat);
+                return acc;
+            }, {});
+
+            Object.keys(groupedChats).sort().forEach(category => {
+                const group = groupedChats[category];
+                chatsHtml += `<div class="crx-group-header">${category} (${group.length})</div>`;
+                group.sort((a, b) => (b.isAlert ? 2 : b.isWaiting ? 1 : 0) - (a.isAlert ? 2 : a.isWaiting ? 1 : 0))
+                     .forEach(chatData => {
+                         // Não exibe a tag de categoria aqui, pois já está sob o cabeçalho do grupo
+                         chatsHtml += createTelegramItemHtml(chatData, false);
+                     });
+            });
+        } else {
+            // Lógica antiga para abas de categorias específicas (lista simples)
+            filteredOtherChats.sort((a, b) => (b.isAlert ? 2 : b.isWaiting ? 1 : 0) - (a.isAlert ? 2 : a.isWaiting ? 1 : 0))
+                         .forEach(chatData => {
+                             chatsHtml += createTelegramItemHtml(chatData, false);
+                         });
+        }
 
         chatListContainer.innerHTML = chatsHtml;
         layoutContainer.appendChild(chatListContainer);
         container.appendChild(layoutContainer);
 
-        // Adiciona eventos de clique das abas
         container.querySelectorAll('.crx-filter-tab').forEach(tab => {
             tab.onclick = () => {
                 activeFilter = tab.getAttribute('data-filter');
-                renderCustomChatList(); // Re-renderiza tudo com o novo filtro
+                renderCustomChatList();
             };
         });
     }
@@ -516,7 +536,7 @@
     function renderListLayout(container, myChats, otherChats) {
         const layoutContainer = document.createElement('div');
         layoutContainer.id = 'crx-list-layout-container';
-        layoutContainer.className = 'crx-chat-list-container'; // Reutiliza o estilo de scroll
+        layoutContainer.className = 'crx-chat-list-container';
         let chatsHtml = '';
 
         if (myChats.length > 0) {
@@ -558,7 +578,7 @@
     }
 
     // =================================================================================
-    // FUNÇÃO PRINCIPAL DE RENDERIZAÇÃO (ATUALIZADA)
+    // FUNÇÃO PRINCIPAL DE RENDERIZAÇÃO
     // =================================================================================
     function renderCustomChatList() {
         const originalContainer = document.querySelector('app-chat-list-container > section');
@@ -573,18 +593,16 @@
 
         const allChatItems = Array.from(document.querySelectorAll('app-chat-list-item'));
 
-        // Mapeia TODOS os itens para extrair seus dados de forma robusta
         const allChatsData = allChatItems.map((item, index) => {
-            // Verifica se o item pertence à lista "Meus chats" subindo na árvore DOM
             const isMyChat = !!item.closest('app-chat-list')?.querySelector('header span')?.textContent.includes('Meus chats');
             const categoria = item.querySelector('span.shrink-0')?.textContent.trim() || 'Sem Categoria';
 
             return {
-                id: `crx-item-${index}`, // ID único para rastreamento
+                id: `crx-item-${index}`,
                 solicitante: item.querySelector('span.font-medium')?.innerText.trim() || 'Usuário anônimo',
                 revenda: item.querySelector('span.inline-flex > span.truncate')?.innerText.trim() || 'Sem revenda',
                 categoria: categoria,
-                hasNotification: !!item.querySelector('app-icon[icon="tablerAlertCircle"]'),
+                hasNotification: !!item.querySelector('app-icon[icon="tablerAlertCircle"]') || !!item.querySelector('span[class*="text-orange"]'),
                 isWaiting: item.classList.contains('crx-is-waiting'),
                 isAlert: item.classList.contains('crx-is-alert'),
                 isActive: item.classList.contains('active'),
@@ -594,12 +612,10 @@
             };
         });
 
-        // Filtra os dados mapeados para criar as duas listas
         const myChatsData = allChatsData.filter(chat => chat.isMyChat);
         const otherChatsData = allChatsData.filter(chat => !chat.isMyChat);
 
-        // --- Inicia a construção do HTML ---
-        crxMainContainer.innerHTML = ''; // Limpa antes de redesenhar
+        crxMainContainer.innerHTML = '';
         crxMainContainer.className = 'crx-layout-' + activeLayout;
 
         addControls(crxMainContainer);
@@ -610,7 +626,6 @@
             renderListLayout(crxMainContainer, myChatsData, otherChatsData);
         }
 
-        // --- Adiciona eventos de clique a todos os itens renderizados ---
         crxMainContainer.querySelectorAll('.crx-tg-item').forEach(item => {
             const itemId = item.getAttribute('data-item-id');
             const correspondingChatData = allChatsData.find(d => d.id === itemId);
