@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         B.PLUS
 // @namespace    http://tampermonkey.net/
-// @version      15.0.6 // Híbrido: Fundação estável (v10) + Features e correções de clique (v15).
+// @version      17.0.0 // Híbrido: Fundação estável (v10) + Features e correções de clique (v15).
 // @description  Combina a estabilidade da renderização do v10 com os recursos e a precisão de dados do v15, incluindo a correção definitiva para cliques incorretos e a exibição de chats em espera.
 // @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
