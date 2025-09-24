@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         B.PLUS
 // @namespace    http://tampermonkey.net/
-// @version      19.0.0 // Adiciona botão Expandir/Recolher, reintroduz notificação e botão de serviço incorreto.
+// @version      20.0.0 // Adiciona botão Expandir/Recolher, reintroduz notificação e botão de serviço incorreto.
 // @description  Versão completa com todas as funcionalidades: Agrupamentos, filtragem, notificação, alerta de serviço e botão para expandir/recolher todos os grupos.
 // @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
@@ -46,6 +46,7 @@
         isInitialized: false,
     };
 
+    // Referência global para o observador para que possamos pausá-lo
     let mainObserver = null;
 
     // =================================================================================
@@ -54,7 +55,12 @@
     const log = (message) => console.log(`[B.Plus! v${CONFIG.SCRIPT_VERSION}] ${message}`);
     const debounce = (func, delay) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => func.apply(this, a), delay); }; };
     const makeSafeForCSS = (name) => name.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase();
-    const hexToRgba = (hex, alpha) => { /* ... inalterado ... */ };
+    const hexToRgba = (hex, alpha) => {
+        let r=0,g=0,b=0;
+        if(hex.length==4){r=parseInt(hex[1]+hex[1],16);g=parseInt(hex[2]+hex[2],16);b=parseInt(hex[3]+hex[3],16);}
+        else if(hex.length==7){r=parseInt(hex.substring(1,3),16);g=parseInt(hex.substring(3,5),16);b=parseInt(hex.substring(5,7),16);}
+        return `rgba(${r},${g},${b},${alpha})`;
+    };
     const waitForElement = (selector) => new Promise(resolve => {
         const check = () => {
             const el = document.querySelector(selector);
@@ -73,8 +79,18 @@
     // =================================================================================
     function injectStyles() {
         if (document.getElementById('bplus-custom-styles')) return;
-        const CATEGORY_COLORS = { /* ... cores ... */ };
-        let dynamicStyles = '';
+        const CATEGORY_COLORS = {
+            'Suporte - Web': '#3498db', 'Suporte - PDV': '#2ecc71', 'Suporte - Retaguarda': '#f39c12',
+            'Suporte - Fiscal': '#e74c3c', 'Suporte - Mobile': '#9b59b6', 'Sem Categoria': '#95a5a6'
+        };
+        let dynamicStyles = Object.entries(CATEGORY_COLORS).map(([category, color]) => {
+            const safeCategory = makeSafeForCSS(category);
+            return `
+                .crx-filter-tab[data-filter="${category}"].active { background-color: ${color} !important; color: white !important; }
+                .crx-item-bg-${safeCategory} { border-left-color: ${color} !important; background-color: ${hexToRgba(color, 0.08)} !important; }
+                .dark .crx-item-bg-${safeCategory} { background-color: ${hexToRgba(color, 0.15)} !important; }
+            `;
+        }).join('');
         GM_addStyle(`
             #bplus-custom-styles{display:none}
             body.bplus-active app-chat-list-container > section > :is(app-chat-list, app-queue-list) { display: none !important; }
@@ -86,7 +102,6 @@
             #crx-layout-toggle:hover, #crx-expand-toggle:hover {background-color:var(--primary-200,#eee)}
             .dark #crx-layout-toggle, .dark #crx-expand-toggle {color:var(--text-color-dark-secondary,#aaa)}
             .dark #crx-layout-toggle:hover, .dark #crx-expand-toggle:hover {background-color:var(--primary-600,#3e374e)}
-            /* ... O resto dos estilos é idêntico à versão anterior ... */
             .crx-filter-tabs{display:flex;flex-shrink:0;overflow-x:auto;overflow-y:hidden;height:48px;align-items:center;padding:0 8px;background-color:var(--primary-100,#fff);border-bottom:1px solid var(--border-color,#e0e0e0)}
             .dark .crx-filter-tabs{background-color:var(--primary-700,#252535);border-bottom-color:var(--border-dark,#3e374e)}
             .crx-filter-tab{padding:8px 12px;margin:0 4px;border-radius:6px;font-size:13px;font-weight:500;color:var(--text-color-secondary,#666);cursor:pointer;white-space:nowrap;transition:all .2s}
@@ -119,8 +134,8 @@
             .dark .crx-tg-subtitle{color:var(--text-color-dark-tertiary,#b0b0b0)}
             .crx-tg-subtitle > span:first-child { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
             .crx-tg-meta { display: flex; flex-direction: column; align-items: flex-end; justify-content: flex-start; margin-left: 8px; flex-shrink: 0; height: 100%; padding-top: 2px;}
-            .crx-unread-badge { display: none; background-color: #ef4444; color: white; font-size: 10px; font-weight: 600; border-radius: 9999px; min-width: 18px; height: 18px; padding: 2px 5px; text-align: center; line-height: 14px; }
-            .crx-service-warning-icon { display: none; align-items: center; justify-content: center; color: #f59e0b; margin-left: 4px; flex-shrink: 0; cursor: pointer; }
+            .crx-unread-badge { display: block; background-color: #ef4444; color: white; font-size: 10px; font-weight: 600; border-radius: 9999px; min-width: 18px; height: 18px; padding: 2px 5px; text-align: center; line-height: 14px; }
+            .crx-service-warning-icon { display: inline-flex; align-items: center; justify-content: center; color: #f59e0b; margin-left: 4px; flex-shrink: 0; cursor: pointer; }
             .crx-service-warning-icon svg { width: 14px; height: 14px; }
             ${dynamicStyles}
         `);
@@ -129,19 +144,197 @@
     // =================================================================================
     // LÓGICA DE DADOS E RENDERIZAÇÃO
     // =================================================================================
-    // Todas as funções de parsing e criação de elementos foram mantidas da v15.0.7
-    function parseChatItemData(itemElement) { /* ... inalterado ... */ }
-    function createAndAppendCustomItem(container, chatData) { /* ... inalterado ... */ }
-    const debouncedRebuild = debounce(() => { /* ... inalterado ... */ });
-    function rebuildAndRenderUI() { /* ... inalterado ... */ }
-    function updateTabsLayout(waiting, my, other) { /* ... inalterado ... */ }
-    function updateListLayout(waiting, my, other) { /* ... inalterado ... */ }
-    function appendGroupsToContainer(container, waiting, my, other) { /* ... inalterado ... */ }
-    function appendGroup(container, title, chats, groupKey) { /* ... inalterado ... */ }
-    function applyChatFilter() { /* ... inalterado ... */ }
-    
+    function parseChatItemData(itemElement) {
+        let solicitante = 'Usuário Desconhecido';
+        let revenda = 'Sem Revenda';
+        let categoria = 'Sem Categoria';
+
+        const mainSection = itemElement.querySelector('section');
+        if (mainSection) {
+            const topDiv = mainSection.querySelector('div');
+            if (topDiv) {
+                solicitante = topDiv.querySelector('span.font-medium')?.innerText.trim() || solicitante;
+                categoria = topDiv.querySelector('span.shrink-0')?.innerText.trim() || categoria;
+            }
+            const revendaElement = topDiv?.nextElementSibling;
+            if (revendaElement && revendaElement.tagName === 'SPAN') {
+                const tempRevendaText = revendaElement.innerText.trim();
+                const waitingTextMatch = tempRevendaText.match(/Aguardando(\s\(.*\))?/);
+                let cleanedRevendaText = tempRevendaText;
+                if (waitingTextMatch) cleanedRevendaText = tempRevendaText.replace(waitingTextMatch[0], '').trim();
+                if (cleanedRevendaText) revenda = cleanedRevendaText;
+            }
+        }
+
+        const unreadElement = itemElement.querySelector(SELECTORS.unreadCountBadge);
+        const unreadCount = unreadElement ? parseInt(unreadElement.innerText, 10) || 0 : 0;
+
+        const serviceWarningElement = itemElement.querySelector(SELECTORS.serviceWarningIcon);
+        const hasServiceWarning = !!serviceWarningElement;
+        const originalServiceWarningButton = hasServiceWarning ? serviceWarningElement.closest('button') : null;
+
+        const isWaiting = Array.from(itemElement.querySelectorAll('app-tag')).some(tag => tag.textContent?.toLowerCase().includes('aguardando'));
+        const isAlert = !isWaiting && !!itemElement.querySelector('app-icon[icon="tablerAlertCircle"]');
+
+        return {
+            solicitante, revenda, categoria, isWaiting, isAlert,
+            unreadCount, hasServiceWarning, originalServiceWarningButton,
+            isActive: itemElement.classList.contains('active'),
+            isMyChat: !!itemElement.closest('app-chat-list')?.querySelector('header span')?.textContent.includes('Meus chats'),
+            originalElement: itemElement,
+        };
+    }
+
+    function createAndAppendCustomItem(container, chatData) {
+        const item = document.createElement('div');
+        item.addEventListener('click', () => chatData.originalElement.click());
+
+        const safeCategory = makeSafeForCSS(chatData.categoria);
+        item.className = `crx-tg-item crx-item-bg-${safeCategory}`;
+        if(chatData.isActive) item.classList.add('active');
+        if(chatData.isAlert) item.classList.add('is-alert');
+        if(chatData.isWaiting) item.classList.add('is-waiting');
+        item.dataset.category = chatData.categoria;
+
+        item.innerHTML = `
+            <div class="crx-tg-avatar is-icon">${ICONS.USER}</div>
+            <div class="crx-tg-content">
+                <div class="crx-tg-title">${chatData.solicitante}</div>
+                <div class="crx-tg-subtitle">
+                    <span>${chatData.revenda}</span>
+                    <span class="crx-service-warning-icon" title="Serviço incorreto" style="display: none;"></span>
+                </div>
+            </div>
+            <div class="crx-tg-meta">
+                <span class="crx-unread-badge" style="display: none;"></span>
+            </div>`;
+
+        const unreadBadge = item.querySelector('.crx-unread-badge');
+        if (chatData.unreadCount > 0) {
+            unreadBadge.textContent = chatData.unreadCount;
+            unreadBadge.style.display = 'block';
+        }
+
+        const warningIcon = item.querySelector('.crx-service-warning-icon');
+        if (chatData.hasServiceWarning && chatData.originalServiceWarningButton) {
+            warningIcon.innerHTML = ICONS.WARNING;
+            warningIcon.style.display = 'inline-flex';
+            warningIcon.onclick = (e) => {
+                e.stopPropagation();
+                chatData.originalServiceWarningButton.click();
+            };
+        }
+        container.appendChild(item);
+    }
+
+    // Wrapper debounced que contém a lógica de desconexão/reconexão
+    const debouncedRebuild = debounce(() => {
+        if (mainObserver) mainObserver.disconnect(); // PAUSA o observador
+
+        rebuildAndRenderUI(); // Executa a lógica de redesenho
+
+        const mainSection = document.querySelector(SELECTORS.mainContainer);
+        if (mainObserver && mainSection) { // RECONECTA o observador
+            mainObserver.observe(mainSection, { childList: true, subtree: true });
+        }
+    }, CONFIG.UPDATE_DEBOUNCE_MS);
+
+    function rebuildAndRenderUI() {
+        const mainContainer = document.getElementById('crx-main-container');
+        if (!mainContainer) return;
+
+        mainContainer.className = 'crx-layout-' + STATE.activeLayout;
+        const allOriginalItems = Array.from(document.querySelectorAll(SELECTORS.allChatItems));
+        const allChatsData = allOriginalItems.map(parseChatItemData);
+
+        const sortFn = (a, b) => (b.isAlert - a.isAlert) || (b.isWaiting - a.isWaiting);
+        const waitingChats = allChatsData.filter(c => c.isWaiting).sort(sortFn);
+        const remaining = allChatsData.filter(c => !c.isWaiting);
+        const myChats = remaining.filter(c => c.isMyChat).sort(sortFn);
+        const otherChats = remaining.filter(c => !c.isMyChat).sort(sortFn);
+
+        if (STATE.activeLayout === 'tabs') {
+            updateTabsLayout(waitingChats, myChats, otherChats);
+        } else {
+            updateListLayout(waitingChats, myChats, otherChats);
+        }
+    }
+
+    function updateTabsLayout(waiting, my, other) {
+        let container = document.getElementById('crx-tabs-layout-container');
+        if(!container) return;
+        const allChats = [...waiting, ...my, ...other];
+        const counts = allChats.reduce((a, c) => (a.set(c.categoria, (a.get(c.categoria) || 0) + 1), a), new Map());
+        let tabsHtml = `<div class="crx-filter-tab ${STATE.activeFilter === 'Todos' ? 'active' : ''}" data-filter="Todos">Todos <span class="count">${allChats.length}</span></div>` +
+                       [...counts.entries()].sort().map(([cat, cnt]) => `<div class="crx-filter-tab ${STATE.activeFilter === cat ? 'active' : ''}" data-filter="${cat}">${cat.replace('Suporte - ','')} <span class="count">${cnt}</span></div>`).join('');
+        const tabsContainer = container.querySelector('.crx-filter-tabs');
+        if (tabsContainer) tabsContainer.innerHTML = tabsHtml;
+        const listContainer = container.querySelector('.crx-chat-list-container');
+        if (listContainer) {
+            listContainer.innerHTML = '';
+            appendGroupsToContainer(listContainer, waiting, my, other);
+            applyChatFilter();
+        }
+        tabsContainer.querySelectorAll('.crx-filter-tab').forEach(t => t.onclick = (e) => {
+            STATE.activeFilter = e.currentTarget.dataset.filter;
+            rebuildAndRenderUI();
+        });
+    }
+
+    function updateListLayout(waiting, my, other) {
+        let listContainer = document.getElementById('crx-list-layout-container');
+        if(!listContainer) return;
+        listContainer.innerHTML = '';
+        appendGroupsToContainer(listContainer, waiting, my, other);
+    }
+
+    function appendGroupsToContainer(container, waiting, my, other) {
+        appendGroup(container, "Aguardando Atendimento", waiting, "group_waiting");
+        appendGroup(container, "Meus Chats", my, "group_mychats");
+        const grouped = other.reduce((a, c) => ((a[c.categoria] = a[c.categoria] || []).push(c), a), {});
+        Object.keys(grouped).sort().forEach(cat => appendGroup(container, cat, grouped[cat], `group_${makeSafeForCSS(cat)}`));
+    }
+
+    function appendGroup(container, title, chats, groupKey) {
+        if (chats.length === 0) return;
+        const isCollapsed = STATE.collapsedGroups.has(groupKey);
+        const header = document.createElement('div');
+        header.className = `crx-group-header ${isCollapsed ? 'collapsed' : ''}`;
+        header.dataset.groupKey = groupKey;
+        header.dataset.originalTitle = title;
+        if (groupKey === 'group_waiting') header.classList.add('group-waiting');
+        header.innerHTML = `<span>${title} (${chats.length})</span><span class="crx-chevron">${ICONS.CHEVRON}</span>`;
+        const itemsContainer = document.createElement('div');
+        itemsContainer.className = `crx-chat-group-items ${isCollapsed ? 'collapsed' : ''}`;
+        chats.forEach(chatData => createAndAppendCustomItem(itemsContainer, chatData));
+        header.addEventListener('click', () => {
+            STATE.collapsedGroups.has(groupKey) ? STATE.collapsedGroups.delete(groupKey) : STATE.collapsedGroups.add(groupKey);
+            GM_setValue('collapsedGroups', JSON.stringify(Array.from(STATE.collapsedGroups)));
+            header.classList.toggle('collapsed');
+            itemsContainer.classList.toggle('collapsed');
+        });
+        container.append(header, itemsContainer);
+    }
+
+    function applyChatFilter() {
+        const listContainer = document.querySelector('#crx-tabs-layout-container .crx-chat-list-container');
+        if (!listContainer) return;
+        listContainer.querySelectorAll('.crx-group-header').forEach(header => {
+            const itemsContainer = header.nextElementSibling;
+            if (!itemsContainer) return;
+            let visibleItemsCount = 0;
+            Array.from(itemsContainer.children).forEach(item => {
+                const isVisible = STATE.activeFilter === 'Todos' || item.dataset.category === STATE.activeFilter;
+                item.style.display = isVisible ? '' : 'none';
+                if (isVisible) visibleItemsCount++;
+            });
+            header.style.display = visibleItemsCount > 0 ? '' : 'none';
+            header.querySelector('span:first-child').textContent = `${header.dataset.originalTitle} (${visibleItemsCount})`;
+        });
+    }
+
     // =================================================================================
-    // INICIALIZAÇÃO E LÓGICA PRINCIPAL
+    // INICIALIZAÇÃO
     // =================================================================================
     async function initialize() {
         if (STATE.isInitialized) return;
@@ -151,9 +344,10 @@
         log("Container detectado. Aguardando estabilização da aplicação Beemore...");
         setTimeout(() => {
             log("Estabilização concluída. Iniciando a UI do B.Plus!.");
+
             STATE.isInitialized = true;
             injectStyles();
-            
+
             let shell = document.getElementById('crx-main-container');
             if (!shell) {
                 shell = document.createElement('div');
@@ -169,18 +363,16 @@
                     </div>
                     <div id="crx-list-layout-container" class="crx-chat-list-container"></div>`;
                 mainSection.appendChild(shell);
-                
-                // Event listener para o botão de layout
+
                 document.getElementById('crx-layout-toggle').addEventListener('click', () => {
                     STATE.activeLayout = (STATE.activeLayout === 'tabs') ? 'list' : 'tabs';
                     GM_setValue('activeLayout', STATE.activeLayout);
                     rebuildAndRenderUI();
                 });
 
-                // Event listener para o novo botão de expandir/recolher
                 document.getElementById('crx-expand-toggle').addEventListener('click', () => {
                     const allGroupKeys = Array.from(document.querySelectorAll('.crx-group-header')).map(h => h.dataset.groupKey);
-                    // Se algum grupo estiver recolhido (ou seja, size > 0), a ação é expandir todos.
+                    // Se algum grupo estiver recolhido (size > 0), a ação é expandir todos.
                     // Caso contrário (size === 0), a ação é recolher todos.
                     if (STATE.collapsedGroups.size > 0) {
                         STATE.collapsedGroups.clear();
@@ -193,11 +385,12 @@
             }
 
             document.body.classList.add('bplus-active');
-            
+
+            // Cria e inicia o observador global
             mainObserver = new MutationObserver(debouncedRebuild);
             mainObserver.observe(mainSection, { childList: true, subtree: true });
 
-            rebuildAndRenderUI();
+            rebuildAndRenderUI(); // Primeira execução
             log("B.Plus! carregado e monitorando.");
 
         }, CONFIG.STABILIZATION_DELAY_MS);
