@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         B.Plus! - Contador de Atendimentos & Melhorias Beemore
 // @namespace    http://tampermonkey.net/
-// @version      9.9-atualizado
-// @description  Agrupamento por categoria na aba 'Todos' e correção para exibir chats 'Aguardando Atendimento', mantendo melhorias recentes.
+// @version      12.0.0
+// @description  Versão final estável com captura universal de chats, barra de abas com rolagem horizontal e interface totalmente personalizável.
 // @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
 // @grant        GM_xmlhttpRequest
@@ -18,7 +18,7 @@
     'use strict';
 
     // --- CONFIGURAÇÕES GERAIS ---
-    const SCRIPT_VERSION = GM_info.script.version || '9.9-atualizado';
+    const SCRIPT_VERSION = GM_info.script.version || '10.0';
     const IDLE_REFRESH_SECONDS = 90;
     const API_URL = 'http://10.1.11.15/contador/api.php';
     const SPINNER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="crx-spinner"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg>`;
@@ -119,7 +119,8 @@
             #bplus-custom-styles { display: none; }
 
             /* --- CONTROLES DE LAYOUT --- */
-            app-chat-list-container > section > app-chat-list { display: none !important; }
+            app-chat-list-container > section > app-chat-list,
+            app-chat-list-container > section > app-queue-list { display: none !important; }
             #crx-main-container { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
 
             /* Esconde o layout não ativo */
@@ -251,11 +252,15 @@
                  if(match) numero = match[1];
             }
         }
-        const activeChatElement = document.querySelector('app-chat-list-item.active');
+        const activeChatElement = document.querySelector('.crx-tg-item.active'); // Usa o item ativo da nossa lista
         if (activeChatElement) {
-            solicitante = activeChatElement.querySelector('span.truncate.font-medium')?.innerText.trim() || '';
-            revenda = activeChatElement.querySelector('span.inline-flex > span.truncate')?.innerText.trim() || '';
-            servicoSelecionado = activeChatElement.querySelector('span.shrink-0')?.innerText.trim() || '';
+            solicitante = activeChatElement.querySelector('.crx-tg-title')?.innerText.trim() || '';
+            revenda = activeChatElement.querySelector('.crx-tg-subtitle > span:last-child')?.innerText.trim() || '';
+        }
+         // Busca o serviço no item original ativo para garantir precisão
+        const originalActiveItem = document.querySelector('app-chat-list-item.active, app-queue-item.active');
+        if(originalActiveItem) {
+             servicoSelecionado = originalActiveItem.querySelector('span.shrink-0')?.innerText.trim() || '';
         }
         return { analista, numero, revenda, solicitante, servicoSelecionado };
     }
@@ -412,9 +417,9 @@
     }
 
     function aplicarDestaquesNosItensOriginais() {
-        document.querySelectorAll('app-chat-list-item').forEach(item => {
+        document.querySelectorAll('app-chat-list-item, app-queue-item').forEach(item => {
             item.classList.remove('crx-is-alert', 'crx-is-waiting');
-            const hasAlert = !!item.querySelector('app-icon[icon="tablerAlertCircle"]');
+            const hasAlert = !!item.querySelector('app-icon[icon="tablerAlertCircle"], span[class*="text-red"]');
             const isAguardando = !!item.querySelector('span[class*="text-orange"]');
             if (hasAlert && !isAguardando) {
                 item.classList.add('crx-is-alert');
@@ -459,7 +464,6 @@
             </div>`;
     }
 
-    // *** FUNÇÃO ATUALIZADA COM A LÓGICA DE AGRUPAMENTO ***
     function renderTabsLayout(container, myChats, otherChats) {
         const layoutContainer = document.createElement('div');
         layoutContainer.id = 'crx-tabs-layout-container';
@@ -484,20 +488,17 @@
         chatListContainer.className = 'crx-chat-list-container';
         let chatsHtml = '';
 
-        // Renderiza "Meus Chats" (sempre no topo, se existirem e passarem no filtro)
         const filteredMyChats = myChats.filter(chat => activeFilter === 'Todos' || chat.categoria === activeFilter);
         if (filteredMyChats.length > 0) {
             chatsHtml += `<div class="crx-group-header">Meus Chats (${filteredMyChats.length})</div>`;
             filteredMyChats.sort((a, b) => (b.isAlert ? 2 : b.isWaiting ? 1 : 0) - (a.isAlert ? 2 : a.isWaiting ? 1 : 0))
                    .forEach(chatData => {
-                        // Exibe a tag de categoria para 'Meus Chats' apenas na aba 'Todos'
                         chatsHtml += createTelegramItemHtml(chatData, activeFilter === 'Todos');
                    });
         }
 
         const filteredOtherChats = otherChats.filter(chat => activeFilter === 'Todos' || chat.categoria === activeFilter);
 
-        // *** LÓGICA DE AGRUPAMENTO APLICADA AQUI ***
         if (activeFilter === 'Todos') {
             const groupedChats = filteredOtherChats.reduce((acc, chat) => {
                 (acc[chat.categoria] = acc[chat.categoria] || []).push(chat);
@@ -509,12 +510,13 @@
                 chatsHtml += `<div class="crx-group-header">${category} (${group.length})</div>`;
                 group.sort((a, b) => (b.isAlert ? 2 : b.isWaiting ? 1 : 0) - (a.isAlert ? 2 : a.isWaiting ? 1 : 0))
                      .forEach(chatData => {
-                         // Não exibe a tag de categoria aqui, pois já está sob o cabeçalho do grupo
                          chatsHtml += createTelegramItemHtml(chatData, false);
                      });
             });
         } else {
-            // Lógica antiga para abas de categorias específicas (lista simples)
+            if (filteredOtherChats.length > 0) {
+                 chatsHtml += `<div class="crx-group-header">${activeFilter} (${filteredOtherChats.length})</div>`;
+            }
             filteredOtherChats.sort((a, b) => (b.isAlert ? 2 : b.isWaiting ? 1 : 0) - (a.isAlert ? 2 : a.isWaiting ? 1 : 0))
                          .forEach(chatData => {
                              chatsHtml += createTelegramItemHtml(chatData, false);
@@ -591,20 +593,26 @@
             originalContainer.appendChild(crxMainContainer);
         }
 
-        const allChatItems = Array.from(document.querySelectorAll('app-chat-list-item'));
+        // **NOVA CAPTURA UNIVERSAL DE DADOS**
+        const allChatItems = Array.from(originalContainer.querySelectorAll('app-chat-list-item, app-queue-item'));
 
         const allChatsData = allChatItems.map((item, index) => {
-            const isMyChat = !!item.closest('app-chat-list')?.querySelector('header span')?.textContent.includes('Meus chats');
-            const categoria = item.querySelector('span.shrink-0')?.textContent.trim() || 'Sem Categoria';
+            const isMyChat = item.closest('app-chat-list')?.querySelector('header span')?.textContent.trim() === 'Meus chats';
+
+            // Lógica unificada para extrair dados
+            const spans = Array.from(item.querySelectorAll('span.truncate'));
+            const solicitante = spans[0]?.innerText.trim() || 'Usuário anônimo';
+            const revenda = spans[1]?.innerText.trim() || 'Sem revenda';
+            const categoria = item.querySelector('span.shrink-0')?.innerText.trim() || 'Sem Categoria';
 
             return {
-                id: `crx-item-${index}`,
-                solicitante: item.querySelector('span.font-medium')?.innerText.trim() || 'Usuário anônimo',
-                revenda: item.querySelector('span.inline-flex > span.truncate')?.innerText.trim() || 'Sem revenda',
-                categoria: categoria,
-                hasNotification: !!item.querySelector('app-icon[icon="tablerAlertCircle"]') || !!item.querySelector('span[class*="text-orange"]'),
-                isWaiting: item.classList.contains('crx-is-waiting'),
-                isAlert: item.classList.contains('crx-is-alert'),
+                id: `crx-item-${index}`, // Mantido para o clique funcionar
+                solicitante,
+                revenda,
+                categoria,
+                hasNotification: !!item.querySelector('app-icon[icon="tablerAlertCircle"], span[class*="text-red"], span[class*="text-orange"]'),
+                isWaiting: item.classList.contains('crx-is-waiting'), // Mantido para destaque visual
+                isAlert: item.classList.contains('crx-is-alert'),   // Mantido para destaque visual
                 isActive: item.classList.contains('active'),
                 avatarImgSrc: item.querySelector('app-user-picture img')?.src,
                 isMyChat: isMyChat,
@@ -635,7 +643,6 @@
         });
     }
 
-
     // =================================================================================
     // INICIALIZAÇÃO E LOOP PRINCIPAL
     // =================================================================================
@@ -662,18 +669,28 @@
 
     function inicializar() {
         injetarEstilos();
-        const observer = new MutationObserver(() => {
+        const observer = new MutationObserver((mutations) => {
             injetarIndicadorDeVersao();
+            // Otimização: verifica se a lista de chats mudou antes de redesenhar
+            for (const mutation of mutations) {
+                if (mutation.target.matches('app-chat-list-container, app-chat-list-container *')) {
+                    aplicarCustomizacoes();
+                    break;
+                }
+            }
         });
         observer.observe(document.body, { childList: true, subtree: true });
+
 
         window.addEventListener('mousemove', resetIdleTimer, { passive: true });
         window.addEventListener('keypress', resetIdleTimer, { passive: true });
         window.addEventListener('click', resetIdleTimer, { passive: true });
         resetIdleTimer();
 
-        if (mainInterval) clearInterval(mainInterval);
-        mainInterval = setInterval(aplicarCustomizacoes, 1500);
+        // O intervalo pode ser removido se o MutationObserver for confiável o suficiente
+        // if (mainInterval) clearInterval(mainInterval);
+        // mainInterval = setInterval(aplicarCustomizacoes, 1500);
+        aplicarCustomizacoes(); // Execução inicial
     }
 
     if (document.readyState === 'loading') {
