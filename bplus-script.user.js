@@ -1,287 +1,616 @@
 // ==UserScript==
-// @name         B.Plus! Interface (Redesenhada)
+// @name         Beemore Chat List Enhancer
 // @namespace    http://tampermonkey.net/
-// @version      1.03
-// @description  Interface redesenhada com React, agrupando chats por categorias com cabeçalhos coloridos, inspirada no novo design.
+// @version      1.0.04
+// @description  Interface customizada para lista de chats do Beemore inspirada no Telegram
 // @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @grant        GM_addStyle
 // @require      https://unpkg.com/react@18/umd/react.production.min.js
 // @require      https://unpkg.com/react-dom@18/umd/react-dom.production.min.js
-// @grant        GM_addStyle
-// @grant        GM_getValue
-// @grant        GM_setValue
-// @grant        GM_info
+// @require      https://cdn.tailwindcss.com
 // ==/UserScript==
 
 (function() {
     'use strict';
 
-    // --- CONFIGURAÇÕES GERAIS ---
-    const SCRIPT_VERSION = GM_info.script.version || '2.0';
+    // Configuração do Tailwind CSS
+    GM_addStyle(`
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        
+        * {
+            font-family: 'Inter', sans-serif;
+        }
+        
+        .beemore-original-chat-list {
+            display: none !important;
+        }
+        
+        /* Estilos customizados para a nova interface */
+        .beemore-custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+        }
+        
+        .beemore-custom-scrollbar::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 3px;
+        }
+        
+        .beemore-custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #c1c1c1;
+            border-radius: 3px;
+        }
+        
+        .beemore-custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: #a8a8a8;
+        }
+        
+        .category-pdv { background-color: #e0f2fe; border-color: #0284c7; }
+        .category-fiscal { background-color: #f3e8ff; border-color: #7c3aed; }
+        .category-suporte { background-color: #dcfce7; border-color: #16a34a; }
+        .category-vendas { background-color: #fef3c7; border-color: #d97706; }
+        .category-outros { background-color: #f5f5f5; border-color: #6b7280; }
+        
+        .tab-pdv { background-color: #0284c7; }
+        .tab-fiscal { background-color: #7c3aed; }
+        .tab-suporte { background-color: #16a34a; }
+        .tab-vendas { background-color: #d97706; }
+        .tab-outros { background-color: #6b7280; }
+    `);
+
+    // Cores das categorias
     const CATEGORY_COLORS = {
-        'Suporte - Mobile': '#4A90E2',      // Azul
-        'Suporte - PDV': '#D0021B',         // Vermelho
-        'Suporte - Retaguarda': '#417505',  // Verde
-        'Suporte - Fiscal': '#F5A623',      // Laranja
-        'Suporte - Web': '#BD10E0',         // Roxo
-        'Sem Categoria': '#777777',         // Cinza
-        'default': '#BDBDBD'
+        'PDV': { bg: 'category-pdv', tab: 'tab-pdv', text: 'text-blue-700' },
+        'Fiscal': { bg: 'category-fiscal', tab: 'tab-fiscal', text: 'text-purple-700' },
+        'Suporte': { bg: 'category-suporte', tab: 'tab-suporte', text: 'text-green-700' },
+        'Vendas': { bg: 'category-vendas', tab: 'tab-vendas', text: 'text-amber-700' },
+        'Outros': { bg: 'category-outros', tab: 'tab-outros', text: 'text-gray-700' }
     };
-    const e = React.createElement;
 
-    // --- INJEÇÃO DE ESTILOS ---
-    function injectStyles() {
-        if (document.getElementById('bplus-custom-styles-v2')) return;
-        let styles = `
-            /* Oculta a interface original do Beemore */
-            app-chat-list-container > section { display: none !important; }
-            #bplus-react-root { height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
-            .crx-main-container { display: flex; flex-direction: column; height: 100%; background-color: #F8F9FA; }
-            .dark .crx-main-container { background-color: #212529; }
-
-            /* Estilo da lista de chats */
-            #crx-chat-list-container { flex-grow: 1; overflow-y: auto; padding: 0; }
-
-            /* Cabeçalho do Grupo de Categoria */
-            .crx-group-header {
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                padding: 8px 12px;
-                font-size: 0.75rem; /* 12px */
-                font-weight: 700;
-                color: white;
-                text-transform: uppercase;
-                cursor: pointer;
-                position: sticky;
-                top: 0;
-                z-index: 10;
-                border-radius: 4px;
-                margin: 8px 8px 0 8px;
-                transition: filter 0.2s;
-            }
-            .crx-group-header:hover { filter: brightness(0.95); }
-            .crx-group-header .arrow {
-                transition: transform 0.2s ease-in-out;
-                font-size: 1rem;
-            }
-            .crx-group-header.collapsed .arrow { transform: rotate(-90deg); }
-            .crx-chat-group.collapsed .crx-group-content { display: none; }
-
-            /* Itens individuais do Chat */
-            .crx-group-content { padding: 0 8px; }
-            .crx-tg-item {
-                display: flex;
-                align-items: center;
-                padding: 10px 8px;
-                background-color: #fff;
-                border-bottom: 1px solid #E9ECEF;
-                cursor: pointer;
-                transition: background-color 0.15s ease-in-out;
-            }
-            .crx-group-content > .crx-tg-item:last-child { border-bottom: none; }
-            .dark .crx-tg-item { background-color: #343A40; border-bottom-color: #495057; }
-            .crx-tg-item:hover { background-color: #F1F3F5; }
-            .dark .crx-tg-item:hover { background-color: #495057; }
-
-            /* Item ativo (conversa selecionada) */
-            .crx-tg-item.active { background-color: #E6F7FF !important; }
-            .dark .crx-tg-item.active { background-color: #0d3c5a !important; }
-
-            /* Avatar e Conteúdo */
-            .crx-tg-avatar {
-                width: 40px;
-                height: 40px;
-                border-radius: 50%;
-                margin-right: 12px;
-                object-fit: cover;
-                flex-shrink: 0;
-            }
-            .crx-tg-content {
-                flex-grow: 1;
-                overflow: hidden;
-            }
-            .crx-tg-title {
-                font-weight: 600;
-                font-size: 0.9rem; /* 14.4px */
-                color: #212529;
-                white-space: nowrap;
-                overflow: hidden;
-                text-overflow: ellipsis;
-            }
-            .dark .crx-tg-title { color: #F8F9FA; }
-            .crx-tg-subtitle {
-                font-size: 0.8rem; /* 12.8px */
-                color: #6C757D;
-                white-space: nowrap;
-                overflow: hidden;
-                text-overflow: ellipsis;
-            }
-            .dark .crx-tg-subtitle { color: #ADB5BD; }
-
-            /* Meta (Notificação e Hora) */
-            .crx-tg-meta {
-                text-align: right;
-                flex-shrink: 0;
-                margin-left: 10px;
-            }
-            .crx-tg-time {
-                font-size: 0.75rem; /* 12px */
-                color: #6C757D;
-                margin-bottom: 4px;
-            }
-            .dark .crx-tg-time { color: #ADB5BD; }
-            .crx-tg-badge {
-                background-color: #D0021B; /* Vermelho para destaque */
-                color: white;
-                border-radius: 10px;
-                width: 20px;
-                height: 20px;
-                font-size: 0.75rem;
-                font-weight: bold;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                margin-left: auto;
-            }
-        `;
-
-        for (const category in CATEGORY_COLORS) {
-            const safeCategory = category.replace(/[\s-]+/g, '-').toLowerCase();
-            const color = CATEGORY_COLORS[category] || CATEGORY_COLORS['default'];
-            styles += `.crx-group-header-${safeCategory} { background-color: ${color}; }`;
+    class ChatDataManager {
+        constructor() {
+            this.chats = [];
+            this.observers = [];
+            this.observer = null;
+            this.init();
         }
 
-        GM_addStyle(styles, 'bplus-custom-styles-v2');
+        init() {
+            this.startObserving();
+        }
+
+        startObserving() {
+            // Observar mudanças no DOM para detectar novos chats
+            this.observer = new MutationObserver((mutations) => {
+                let shouldUpdate = false;
+                
+                mutations.forEach((mutation) => {
+                    if (mutation.type === 'childList') {
+                        mutation.addedNodes.forEach((node) => {
+                            if (node.nodeType === 1 && (
+                                node.matches?.('app-chat-list-item') || 
+                                node.matches?.('app-queue-item') ||
+                                node.querySelector?.('app-chat-list-item') ||
+                                node.querySelector?.('app-queue-item')
+                            )) {
+                                shouldUpdate = true;
+                            }
+                        });
+                    }
+                });
+
+                if (shouldUpdate) {
+                    this.updateChats();
+                }
+            });
+
+            // Iniciar observação
+            const chatContainer = document.querySelector('app-chat-list-container section');
+            if (chatContainer) {
+                this.observer.observe(chatContainer, {
+                    childList: true,
+                    subtree: true
+                });
+                this.updateChats();
+            } else {
+                // Tentar novamente após 1 segundo se o container não estiver disponível
+                setTimeout(() => this.startObserving(), 1000);
+            }
+        }
+
+        extractChatData(element) {
+            try {
+                // Extrair nome do solicitante
+                const nameElement = element.querySelector('[class*="name"], [class*="contact"]');
+                const name = nameElement?.textContent?.trim() || 'Nome não disponível';
+
+                // Extrair revenda
+                const revendaElement = element.querySelector('[class*="company"], [class*="revenda"]');
+                const revenda = revendaElement?.textContent?.trim() || 'Revenda não informada';
+
+                // Extrair categoria/serviço
+                const categoryElement = element.querySelector('[class*="category"], [class*="service"]');
+                let category = categoryElement?.textContent?.trim() || 'Outros';
+                
+                // Normalizar categoria
+                if (category.includes('PDV')) category = 'PDV';
+                else if (category.includes('Fiscal')) category = 'Fiscal';
+                else if (category.includes('Suporte')) category = 'Suporte';
+                else if (category.includes('Vendas')) category = 'Vendas';
+                else category = 'Outros';
+
+                // Verificar notificação (ícone de alerta)
+                const hasNotification = !!element.querySelector('[class*="notification"], [class*="alert"], .bg-red-500, .text-red-500');
+
+                // Verificar se está selecionado
+                const isSelected = element.hasAttribute('active') || 
+                                 element.classList.contains('active') ||
+                                 element.getAttribute('class')?.includes('selected');
+
+                // Extrair avatar
+                const avatarElement = element.querySelector('img, [class*="avatar"]');
+                const avatarUrl = avatarElement?.src || avatarElement?.getAttribute('src') || '';
+
+                // Determinar propriedade (Meus chats ou Outros)
+                const isMyChat = element.closest('[class*="my-chats"], [class*="meus-chats"]') !== null;
+                const property = isMyChat ? 'Meus chats' : 'Outros';
+
+                return {
+                    id: element.getAttribute('data-chat-id') || Math.random().toString(36),
+                    name,
+                    revenda,
+                    category,
+                    hasNotification,
+                    isSelected,
+                    avatarUrl,
+                    property,
+                    originalElement: element
+                };
+            } catch (error) {
+                console.error('Erro ao extrair dados do chat:', error);
+                return null;
+            }
+        }
+
+        updateChats() {
+            const chatElements = document.querySelectorAll('app-chat-list-item, app-queue-item');
+            const newChats = [];
+
+            chatElements.forEach((element, index) => {
+                const chatData = this.extractChatData(element);
+                if (chatData) {
+                    newChats.push(chatData);
+                }
+            });
+
+            this.chats = newChats;
+            this.notifyObservers();
+        }
+
+        subscribe(observer) {
+            this.observers.push(observer);
+        }
+
+        unsubscribe(observer) {
+            this.observers = this.observers.filter(obs => obs !== observer);
+        }
+
+        notifyObservers() {
+            this.observers.forEach(observer => observer(this.chats));
+        }
+
+        getChatsByCategory(category) {
+            if (category === 'Todos') return this.chats;
+            return this.chats.filter(chat => chat.category === category);
+        }
+
+        getCategoryCounts() {
+            const counts = { 'Todos': this.chats.length };
+            this.chats.forEach(chat => {
+                counts[chat.category] = (counts[chat.category] || 0) + 1;
+            });
+            return counts;
+        }
     }
 
-    // --- CAPTURA DE DADOS ---
-    function scrapeBeemoreData() {
-        const allItems = document.querySelectorAll('app-chat-list-item, app-queue-item');
-        return Array.from(allItems).map((item, index) => {
-            const spans = Array.from(item.querySelectorAll('span.truncate'));
-            const categoriaElement = item.querySelector('span.shrink-0');
-            const timeElement = item.querySelector('.text-right > span.truncate');
+    // Componentes React
+    const { useState, useEffect, useCallback } = React;
 
-            // Heurística para contar notificações (pode precisar de ajuste)
-            const notificationBadge = item.querySelector('span.absolute');
-            const unreadCount = notificationBadge ? parseInt(notificationBadge.innerText, 10) || 1 : 0;
+    function ChatItem({ chat, onClick }) {
+        const categoryStyle = CATEGORY_COLORS[chat.category] || CATEGORY_COLORS.Outros;
 
-            return {
-                id: `chat-${index}-${spans[0]?.innerText || ''}`,
-                solicitante: spans[0]?.innerText.trim() || 'Usuário anônimo',
-                revenda: spans[1]?.innerText.trim() || 'Sem revenda',
-                categoria: categoriaElement ? categoriaElement.innerText.trim().replace('Suporte ', 'Suporte - ') : 'Sem Categoria',
-                time: timeElement ? timeElement.innerText.trim() : '',
-                unreadCount: unreadCount,
-                isActive: item.classList.contains('active'),
-                avatarImgSrc: item.querySelector('app-user-picture img')?.src,
-                originalElement: item
-            };
-        });
+        return (
+            <div 
+                className={`p-3 border-l-4 rounded-r-lg cursor-pointer transition-all duration-200 hover:shadow-md ${
+                    chat.isSelected ? 'bg-blue-50 border-blue-500' : 'bg-white'
+                } ${categoryStyle.bg} border-l-4`}
+                onClick={() => onClick(chat)}
+            >
+                <div className="flex items-center space-x-3">
+                    {/* Avatar */}
+                    <div className="flex-shrink-0">
+                        {chat.avatarUrl ? (
+                            <img 
+                                src={chat.avatarUrl} 
+                                alt={chat.name}
+                                className="w-10 h-10 rounded-full object-cover"
+                            />
+                        ) : (
+                            <div className={`w-10 h-10 rounded-full flex items-center justify-center ${categoryStyle.bg} ${categoryStyle.text} font-semibold`}>
+                                {chat.name.charAt(0).toUpperCase()}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Informações do chat */}
+                    <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between">
+                            <p className="text-sm font-semibold text-gray-900 truncate">
+                                {chat.name}
+                            </p>
+                            {chat.hasNotification && (
+                                <div className="w-2 h-2 bg-orange-500 rounded-full flex-shrink-0"></div>
+                            )}
+                        </div>
+                        <p className="text-xs text-gray-500 truncate">{chat.revenda}</p>
+                    </div>
+                </div>
+            </div>
+        );
     }
 
-    // --- COMPONENTES REACT ---
-    const ChatItem = ({ chat }) => {
-        return e('div', {
-                className: `crx-tg-item ${chat.isActive ? 'active' : ''}`,
-                onClick: () => chat.originalElement.click()
-            },
-            e('img', { src: chat.avatarImgSrc, className: 'crx-tg-avatar' }),
-            e('div', { className: 'crx-tg-content' },
-                e('div', { className: 'crx-tg-title' }, chat.solicitante),
-                e('div', { className: 'crx-tg-subtitle' }, chat.revenda)
-            ),
-            e('div', { className: 'crx-tg-meta' },
-                e('div', { className: 'crx-tg-time' }, chat.time),
-                chat.unreadCount > 0 && e('div', { className: 'crx-tg-badge' }, chat.unreadCount)
-            )
+    function CategoryHeader({ category, count, isExpanded, onToggle, colorStyle }) {
+        return (
+            <div 
+                className={`p-3 border-l-4 rounded-r-lg cursor-pointer ${colorStyle.bg} border-l-4`}
+                onClick={onToggle}
+            >
+                <div className="flex items-center justify-between">
+                    <span className={`text-sm font-semibold ${colorStyle.text}`}>
+                        {category}
+                    </span>
+                    <div className="flex items-center space-x-2">
+                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${colorStyle.bg} ${colorStyle.text}`}>
+                            {count}
+                        </span>
+                        <svg 
+                            className={`w-4 h-4 transition-transform duration-200 ${colorStyle.text} ${
+                                isExpanded ? 'rotate-180' : ''
+                            }`}
+                            fill="none" 
+                            stroke="currentColor" 
+                            viewBox="0 0 24 24"
+                        >
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                    </div>
+                </div>
+            </div>
         );
-    };
+    }
 
-    const ChatGroup = ({ category, chats }) => {
-        const [isCollapsed, setIsCollapsed] = React.useState(false);
+    function TabLayout({ chats, activeTab, onTabChange, onChatClick }) {
+        const categoryCounts = chats.reduce((acc, chat) => {
+            acc[chat.category] = (acc[chat.category] || 0) + 1;
+            return acc;
+        }, { 'Todos': chats.length });
 
-        if (!chats || chats.length === 0) return null;
+        const categories = ['Todos', ...Object.keys(CATEGORY_COLORS).filter(cat => categoryCounts[cat] > 0)];
 
-        const safeCategory = category.replace(/[\s-]+/g, '-').toLowerCase();
-        const headerClass = `crx-group-header crx-group-header-${safeCategory} ${isCollapsed ? 'collapsed' : ''}`;
+        const filteredChats = activeTab === 'Todos' ? chats : chats.filter(chat => chat.category === activeTab);
 
-        return e('div', { className: `crx-chat-group ${isCollapsed ? 'collapsed' : ''}` },
-            e('div', {
-                className: headerClass,
-                onClick: () => setIsCollapsed(!isCollapsed)
-            },
-                e('span', null, `${category} (${chats.length})`),
-                e('span', { className: 'arrow' }, '▼')
-            ),
-            e('div', { className: 'crx-group-content' },
-                ...chats.map(chat => e(ChatItem, { key: chat.id, chat }))
-            )
+        return (
+            <div className="h-full flex flex-col">
+                {/* Barra de abas */}
+                <div className="flex space-x-1 p-2 bg-gray-100 overflow-x-auto beemore-custom-scrollbar">
+                    {categories.map(category => {
+                        const colorStyle = CATEGORY_COLORS[category] || CATEGORY_COLORS.Outros;
+                        const isActive = activeTab === category;
+                        
+                        return (
+                            <button
+                                key={category}
+                                className={`flex items-center space-x-1 px-3 py-2 rounded-lg text-xs font-medium whitespace-nowrap transition-all duration-200 ${
+                                    isActive 
+                                        ? `${colorStyle.tab} text-white shadow-sm` 
+                                        : 'bg-white text-gray-700 hover:bg-gray-50'
+                                }`}
+                                onClick={() => onTabChange(category)}
+                            >
+                                <span>{category === 'Todos' ? 'Todos' : category}</span>
+                                <span className={`px-1 rounded text-xs ${
+                                    isActive ? 'bg-white bg-opacity-20' : 'bg-gray-100'
+                                }`}>
+                                    {categoryCounts[category] || 0}
+                                </span>
+                            </button>
+                        );
+                    })}
+                </div>
+
+                {/* Lista de chats */}
+                <div className="flex-1 overflow-y-auto beemore-custom-scrollbar">
+                    {activeTab === 'Todos' ? (
+                        // Agrupar por categoria na aba "Todos"
+                        Object.keys(CATEGORY_COLORS).map(category => {
+                            const categoryChats = chats.filter(chat => chat.category === category);
+                            if (categoryChats.length === 0) return null;
+                            
+                            const colorStyle = CATEGORY_COLORS[category];
+                            return (
+                                <div key={category}>
+                                    <div className={`p-2 text-xs font-semibold ${colorStyle.text} bg-gray-50`}>
+                                        {category} ({categoryChats.length})
+                                    </div>
+                                    {categoryChats.map(chat => (
+                                        <ChatItem key={chat.id} chat={chat} onClick={onChatClick} />
+                                    ))}
+                                </div>
+                            );
+                        })
+                    ) : (
+                        // Lista simples para outras abas
+                        filteredChats.map(chat => (
+                            <ChatItem key={chat.id} chat={chat} onClick={onChatClick} />
+                        ))
+                    )}
+                </div>
+            </div>
         );
-    };
+    }
 
-    const App = () => {
-        const [chats, setChats] = React.useState([]);
+    function ListLayout({ chats, onChatClick }) {
+        const [expandedCategories, setExpandedCategories] = useState(
+            GM_getValue('expandedCategories', {})
+        );
 
-        React.useEffect(() => {
-            const targetNode = document.querySelector('app-chat-list-container > section');
-            if (!targetNode) return;
-            const updateData = () => setChats(scrapeBeemoreData());
-            const observer = new MutationObserver(updateData);
-            observer.observe(targetNode, { childList: true, subtree: true });
-            updateData(); // Carga inicial
-            return () => observer.disconnect();
+        const toggleCategory = useCallback((category) => {
+            setExpandedCategories(prev => {
+                const newState = {
+                    ...prev,
+                    [category]: !prev[category]
+                };
+                GM_setValue('expandedCategories', newState);
+                return newState;
+            });
         }, []);
 
-        const groupedChats = chats.reduce((acc, chat) => {
-            const category = chat.categoria || 'Sem Categoria';
-            if (!acc[category]) {
-                acc[category] = [];
+        const chatsByCategory = chats.reduce((acc, chat) => {
+            if (!acc[chat.category]) {
+                acc[chat.category] = [];
             }
-            acc[category].push(chat);
+            acc[chat.category].push(chat);
             return acc;
         }, {});
 
-        // Ordena as categorias para manter uma ordem consistente
-        const sortedCategories = Object.keys(groupedChats).sort((a, b) => a.localeCompare(b));
+        return (
+            <div className="h-full overflow-y-auto beemore-custom-scrollbar">
+                {Object.entries(chatsByCategory).map(([category, categoryChats]) => {
+                    const colorStyle = CATEGORY_COLORS[category] || CATEGORY_COLORS.Outros;
+                    const isExpanded = expandedCategories[category] !== false;
 
-        return e('div', { className: 'crx-main-container' },
-            e('div', { id: 'crx-chat-list-container' },
-                sortedCategories.map(category =>
-                    e(ChatGroup, {
-                        key: category,
-                        category: category,
-                        chats: groupedChats[category]
-                    })
-                )
-            )
+                    return (
+                        <div key={category}>
+                            <CategoryHeader
+                                category={category}
+                                count={categoryChats.length}
+                                isExpanded={isExpanded}
+                                onToggle={() => toggleCategory(category)}
+                                colorStyle={colorStyle}
+                            />
+                            {isExpanded && categoryChats.map(chat => (
+                                <ChatItem key={chat.id} chat={chat} onClick={onChatClick} />
+                            ))}
+                        </div>
+                    );
+                })}
+            </div>
         );
-    };
+    }
 
-    // --- INICIALIZAÇÃO ---
-    function initialize() {
-        const targetNode = document.querySelector('app-chat-list-container');
-        if (!targetNode) return;
-        
-        let reactRootEl = document.getElementById('bplus-react-root');
-        if (!reactRootEl) {
-            reactRootEl = document.createElement('div');
-            reactRootEl.id = 'bplus-react-root';
-            // Ajusta a altura considerando o espaço do header da página original
-            reactRootEl.style.height = 'calc(100% - 60px)';
-            targetNode.appendChild(reactRootEl);
-            injectStyles();
-            ReactDOM.createRoot(reactRootEl).render(e(App));
+    function VersionIndicator() {
+        const [isVisible, setIsVisible] = useState(false);
+
+        return (
+            <div className="fixed left-4 bottom-4 z-50">
+                <div 
+                    className="relative"
+                    onMouseEnter={() => setIsVisible(true)}
+                    onMouseLeave={() => setIsVisible(false)}
+                >
+                    <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center shadow-lg cursor-pointer">
+                        <span className="text-white font-bold text-sm">B+</span>
+                    </div>
+                    
+                    {isVisible && (
+                        <div className="absolute left-full ml-2 bottom-0 bg-white rounded-lg shadow-xl p-3 min-w-48">
+                            <div className="text-sm font-semibold text-gray-900">
+                                Beemore Enhancer v1.0.0
+                            </div>
+                            <div className="text-xs text-green-600 font-medium mt-1">
+                                ✅ Operacional
+                            </div>
+                            <div className="text-xs text-gray-500 mt-2">
+                                Interface customizada para atendimento
+                            </div>
+                        </div>
+                    )}
+                </div>
+            </div>
+        );
+    }
+
+    function ChatInterface() {
+        const [chats, setChats] = useState([]);
+        const [layout, setLayout] = useState(GM_getValue('preferredLayout', 'tabs'));
+        const [activeTab, setActiveTab] = useState('Todos');
+
+        useEffect(() => {
+            const chatManager = new ChatDataManager();
+            
+            const handleChatsUpdate = (updatedChats) => {
+                setChats(updatedChats);
+            };
+
+            chatManager.subscribe(handleChatsUpdate);
+            
+            return () => chatManager.unsubscribe(handleChatsUpdate);
+        }, []);
+
+        const handleChatClick = useCallback((chat) => {
+            if (chat.originalElement) {
+                chat.originalElement.click();
+            }
+        }, []);
+
+        const toggleLayout = useCallback(() => {
+            const newLayout = layout === 'tabs' ? 'list' : 'tabs';
+            setLayout(newLayout);
+            GM_setValue('preferredLayout', newLayout);
+            setActiveTab('Todos');
+        }, [layout]);
+
+        return (
+            <div className="h-full flex flex-col bg-white">
+                {/* Cabeçalho de controle */}
+                <div className="flex items-center justify-between p-3 border-b bg-gray-50">
+                    <h3 className="text-lg font-semibold text-gray-900">Chats</h3>
+                    <button
+                        onClick={toggleLayout}
+                        className="flex items-center space-x-2 px-3 py-2 bg-white border rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+                    >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            {layout === 'tabs' ? (
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                            ) : (
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M3 14h18M3 18h18M3 6h18" />
+                            )}
+                        </svg>
+                        <span>{layout === 'tabs' ? 'Layout Lista' : 'Layout Abas'}</span>
+                    </button>
+                </div>
+
+                {/* Interface principal */}
+                <div className="flex-1">
+                    {layout === 'tabs' ? (
+                        <TabLayout
+                            chats={chats}
+                            activeTab={activeTab}
+                            onTabChange={setActiveTab}
+                            onChatClick={handleChatClick}
+                        />
+                    ) : (
+                        <ListLayout
+                            chats={chats}
+                            onChatClick={handleChatClick}
+                        />
+                    )}
+                </div>
+
+                <VersionIndicator />
+            </div>
+        );
+    }
+
+    // Sistema de auto-refresh
+    class AutoRefreshManager {
+        constructor() {
+            this.inactivityTimeout = 90; // segundos
+            this.timer = null;
+            this.lastActivity = Date.now();
+            this.isUserActive = true;
+            this.init();
+        }
+
+        init() {
+            this.resetTimer();
+            this.setupActivityListeners();
+        }
+
+        setupActivityListeners() {
+            const events = ['mousedown', 'mousemove', 'keypress', 'scroll', 'touchstart'];
+            
+            events.forEach(event => {
+                document.addEventListener(event, () => {
+                    this.lastActivity = Date.now();
+                    this.isUserActive = true;
+                    this.resetTimer();
+                }, { passive: true });
+            });
+        }
+
+        resetTimer() {
+            if (this.timer) clearTimeout(this.timer);
+            
+            this.timer = setTimeout(() => {
+                this.isUserActive = false;
+                this.checkAndRefresh();
+            }, this.inactivityTimeout * 1000);
+        }
+
+        checkAndRefresh() {
+            // Verificar se o usuário não está em um chat ativo
+            const activeChat = document.querySelector('app-chat-list-item[active], app-chat-list-item.active');
+            
+            if (!activeChat && !this.isUserActive) {
+                this.refreshChatList();
+            }
+            
+            this.resetTimer();
+        }
+
+        refreshChatList() {
+            console.log('Auto-refresh: Atualizando lista de chats...');
+            
+            // Simular clique para ir ao Dashboard e voltar
+            const dashboardBtn = document.querySelector('[href*="dashboard"], [class*="dashboard"]');
+            const chatBtn = document.querySelector('[href*="chat"], [class*="chat"]');
+            
+            if (dashboardBtn && chatBtn) {
+                setTimeout(() => {
+                    dashboardBtn.click();
+                    setTimeout(() => chatBtn.click(), 1000);
+                }, 500);
+            }
         }
     }
 
-    const initObserver = new MutationObserver((mutations, obs) => {
-        if (document.querySelector('app-chat-list-container > section')) {
-            initialize();
-            obs.disconnect(); // Roda apenas uma vez
+    // Inicialização do script
+    function init() {
+        // Ocultar lista original
+        const originalChatList = document.querySelector('app-chat-list-container section');
+        if (originalChatList) {
+            originalChatList.classList.add('beemore-original-chat-list');
         }
-    });
-    initObserver.observe(document.body, { childList: true, subtree: true });
 
+        // Criar container para a nova interface
+        const appContainer = document.createElement('div');
+        appContainer.id = 'beemore-custom-chat-list';
+        appContainer.className = 'h-full w-full';
+        
+        // Inserir após a lista original
+        if (originalChatList && originalChatList.parentNode) {
+            originalChatList.parentNode.insertBefore(appContainer, originalChatList.nextSibling);
+        } else {
+            document.body.appendChild(appContainer);
+        }
+
+        // Renderizar aplicação React
+        const root = ReactDOM.createRoot(appContainer);
+        root.render(React.createElement(ChatInterface));
+
+        // Iniciar auto-refresh
+        new AutoRefreshManager();
+
+        console.log('Beemore Chat List Enhancer inicializado com sucesso!');
+    }
+
+    // Aguardar o DOM carregar
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
 })();
