@@ -1,434 +1,327 @@
 // ==UserScript==
-// @name         Beemore+ Chat Interface
+// @name         B.Plus! - Contador de Atendimentos & Melhorias Beemore
 // @namespace    http://tampermonkey.net/
-// @version      1.0
-// @description  Substitui a lista de chats do Beemore por uma UI customizada com React, inspirada no Telegram.
+// @version      1.0.00
+// @description  Botão 'Serviço Incorreto' visível em todos os chats, mais otimizações visuais e correções.
 // @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
-// @grant        GM_setValue
+// @grant        GM_xmlhttpRequest
+// @grant        GM_addStyle
 // @grant        GM_getValue
-// @require      https://unpkg.com/react@18/umd/react.production.min.js
-// @require      https://unpkg.com/react-dom@18/umd/react-dom.production.min.js
-// @require      https://unpkg.com/@babel/standalone/babel.min.js
+// @grant        GM_setValue
+// @connect      10.1.11.15
+// @connect      est015
 // ==/UserScript==
-/* jshint esversion: 11 */
 
 (function() {
     'use strict';
 
-    const SCRIPT_VERSION = '1.0';
+    // --- CONFIGURAÇÕES GERAIS ---
+    const API_URL = 'http://10.1.11.15/contador/api.php';
+    const CATEGORY_COLORS_LIGHT = {
+        'Suporte - PDV': '#E57373', 'Suporte - Retaguarda': '#64B5F6', 'Suporte - Fiscal': '#81C784',
+        'Suporte - Web': '#FFD54F', 'Suporte - Mobile': '#FFB74D', 'default': '#BDBDBD'
+    };
+    const CATEGORY_COLORS_DARK = {
+        'Suporte - PDV': '#E57373', 'Suporte - Retaguarda': '#64B5F6', 'Suporte - Fiscal': '#81C784',
+        'Suporte - Web': '#FFD54F', 'Suporte - Mobile': '#FFB74D', 'default': '#757575'
+    };
 
-    //--- CONFIGURAÇÕES ---//
-    const INACTIVITY_REFRESH_SECONDS = 90; // Tempo em segundos para o auto-refresh
+    // =================================================================================
+    // INJEÇÃO DE ESTILOS
+    // =================================================================================
+    function injetarEstilos() {
+        if (document.getElementById('bplus-custom-styles')) return;
+        let lightStyles = '', darkStyles = '';
+        for (const category in CATEGORY_COLORS_LIGHT) {
+            const safeCategory = category.replace(/[\s-]+/g, '-').toLowerCase();
+            lightStyles += `.${'crx-category-' + safeCategory} { border-left: 5px solid ${CATEGORY_COLORS_LIGHT[category]} !important; }`;
+            darkStyles += `.dark .${'crx-category-' + safeCategory} { border-left: 5px solid ${CATEGORY_COLORS_DARK[category]} !important; }`;
+        }
+        GM_addStyle(`
+            /* Animações e Destaques */
+            @keyframes pulse-highlight-glow { 50% { box-shadow: 0 0 10px 3px rgba(251, 192, 45, 0.7); } }
+            .dark @keyframes pulse-highlight-glow { 50% { box-shadow: 0 0 10px 3px rgba(255, 215, 0, 0.6); } }
+            @keyframes pulse-aguardando-glow { 50% { box-shadow: 0 0 10px 3px rgba(66, 165, 245, 0.7); } }
+            .crx-chat-highlight { background-color: #FFF9C4 !important; animation: pulse-highlight-glow 2.5s infinite; }
+            .dark .crx-chat-highlight { background-color: #4a4a6a !important; }
+            .crx-chat-aguardando { animation: pulse-aguardando-glow 2.5s infinite; }
 
-    //--- INJEÇÃO DE ESTILOS E SCRIPTS ---//
-    function injectTailwind() {
-        const script = document.createElement('script');
-        script.src = 'https://cdn.tailwindcss.com';
-        document.head.appendChild(script);
+            /* Elementos da UI */
+            .crx-group-header { font-size: 0.75rem; font-weight: 600; background-color: #f0f0f0; padding: 4px 12px; border-bottom: 1px solid #e0e0e0; text-transform: uppercase; margin-top: 8px; position: sticky; top: 0; z-index: 5; }
+            .dark .crx-group-header { background-color: #3e374e; border-color: #4c445c; color: #e1e1e1; }
+            #crx-header-btn { background-color: #FB923C; color: white !important; border: 1px solid #F97316; padding: 0 12px; height: 32px; border-radius: 0.25rem; cursor: pointer; font-weight: 500; margin-right: 8px; display: flex; align-items: center; }
+            #crx-header-btn:hover { background-color: #F97316; border-color: #EA580C; }
+            #custom-refresh-btn { background-color: #ffffff; border: 1px solid #e5e7eb; color: #525252; }
+            .dark #custom-refresh-btn { background-color: #37374a; border-color: #4c445c; color: #e1e1e1; }
 
-        const style = document.createElement('style');
-        style.type = 'text/css';
-        style.innerHTML = `
-            /* Estilo para a barra de rolagem customizada */
-            .custom-scrollbar::-webkit-scrollbar {
-                width: 8px;
-                height: 8px;
-            }
-            .custom-scrollbar::-webkit-scrollbar-track {
-                background: #2d283a;
-            }
-            .custom-scrollbar::-webkit-scrollbar-thumb {
-                background-color: #584d70;
-                border-radius: 10px;
-                border: 2px solid #2d283a;
-            }
-            .tooltip {
-                visibility: hidden;
-                background-color: #1f1b29;
-                color: #fff;
-                text-align: center;
-                border-radius: 6px;
-                padding: 5px 10px;
-                position: absolute;
-                z-index: 100;
-                bottom: 125%;
-                left: 50%;
-                margin-left: -60px;
-                opacity: 0;
-                transition: opacity 0.3s;
-                width: 120px;
-            }
-            .tooltip::after {
-                content: "";
-                position: absolute;
-                top: 100%;
-                left: 50%;
-                margin-left: -5px;
-                border-width: 5px;
-                border-style: solid;
-                border-color: #1f1b29 transparent transparent transparent;
-            }
-            #bplus-indicator:hover .tooltip {
-                visibility: visible;
-                opacity: 1;
-            }
-        `;
-        document.head.appendChild(style);
+            /* Modal (Claro e Escuro) */
+            .crx-modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.6); z-index: 9998; display: flex; justify-content: center; align-items: center; }
+            .crx-modal-content { background-color: white; padding: 25px; border-radius: 8px; width: 350px; box-shadow: 0 5px 15px rgba(0,0,0,0.3); z-index: 9999; }
+            .dark .crx-modal-content { background-color: #2c2c3d; color: #e1e1e1; }
+            .crx-modal-content h3 { margin: 0 0 20px 0; color: #333; }
+            .dark .crx-modal-content h3 { color: #e1e1e1; }
+            .crx-form-group label { display: block; margin-bottom: 5px; font-weight: 500; color: #333; }
+            .dark .crx-form-group label { color: #e1e1e1; }
+            .crx-form-group input, .crx-form-group select { width: 100%; padding: 8px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; background-color: #fff !important; color: #000 !important; }
+            .dark .crx-form-group input, .dark .crx-form-group select { background-color: #3e374e !important; color: #e1e1e1 !important; border-color: #4c445c !important; }
+            .crx-btn { width: 100%; padding: 10px; background-color: #2c6fbb; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; }
+            #crx-status { margin-top: 15px; font-weight: bold; text-align: center; }
+
+            /* Estilos de Categoria */
+            ${lightStyles} ${darkStyles}
+        `);
     }
 
-    //--- LÓGICA DE EXTRAÇÃO DE DADOS (PARSER) ---//
-    function parseChatItem(itemElement, ownership) {
-        try {
-            const isQueueItem = itemElement.tagName.toLowerCase() === 'app-queue-item';
-            
-            const solicitanteElem = itemElement.querySelector('section > div:nth-child(1) > span:nth-child(1)');
-            const solicitante = solicitanteElem ? solicitanteElem.textContent.trim() : 'N/A';
+    // =================================================================================
+    // CAPTURA DE DADOS
+    // =================================================================================
+    function capturarDadosPagina() {
+        const headerElement = document.querySelector('app-chat-list-container > header');
+        const chatHeaderElement = document.querySelector('app-chat-agent-header');
+        const detailsContainer = document.querySelector('app-chat-aside');
 
-            const revendaElem = isQueueItem
-                ? itemElement.querySelector('section > span:nth-child(2)')
-                : itemElement.querySelector('section > span:nth-child(2) > span:nth-child(1)');
-            const revenda = revendaElem ? revendaElem.textContent.trim() : 'N/A';
+        let analista = '', numero = '', solicitante = '', revenda = '', servicoSelecionado = '';
 
-            const categoriaElem = itemElement.querySelector('section > div:nth-child(1) > span:nth-child(2)');
-            const categoria = categoriaElem ? categoriaElem.textContent.trim() : 'Sem Categoria';
+        analista = headerElement?.querySelector('span.font-medium')?.innerText.trim() || '';
 
-            const avatarElem = itemElement.querySelector('app-user-picture img');
-            const avatarUrl = avatarElem ? avatarElem.src : null;
-
-            const hasNotification = !!itemElement.querySelector('app-icon[icon="tablerAlertCircle"]') ||
-                                    (isQueueItem && !!itemElement.querySelector('app-tag'));
-            
-            const isSelected = itemElement.classList.contains('active');
-
-            return {
-                id: `${ownership}-${solicitante}-${revenda}`,
-                solicitante,
-                revenda,
-                categoria,
-                avatarUrl,
-                hasNotification,
-                isSelected,
-                ownership,
-                originalElement: itemElement,
-            };
-        } catch (error) {
-            console.error('Beemore+ Error parsing chat item:', error, itemElement);
-            return null;
-        }
-    }
-
-    function scrapeData() {
-        const chats = [];
-        const myChatsContainer = document.querySelector('app-chat-list:nth-of-type(1)');
-        const otherChatsContainer = document.querySelector('app-chat-list:nth-of-type(2)');
-
-        if (myChatsContainer) {
-            const myChatItems = myChatsContainer.querySelectorAll('app-chat-list-item, app-queue-item');
-            myChatItems.forEach(item => {
-                const parsed = parseChatItem(item, 'Meus chats');
-                if (parsed) chats.push(parsed);
-            });
-        }
-
-        if (otherChatsContainer) {
-            const otherChatItems = otherChatsContainer.querySelectorAll('app-chat-list-item, app-queue-item');
-            otherChatItems.forEach(item => {
-                const parsed = parseChatItem(item, 'Outros');
-                if (parsed) chats.push(parsed);
-            });
-        }
-        
-        return chats;
-    }
-
-    //--- COMPONENTES REACT (JSX) ---//
-    const App = () => {
-        const [chats, setChats] = React.useState([]);
-        const [layout, setLayout] = React.useState('tabs'); // 'tabs' ou 'list'
-        const [activeTab, setActiveTab] = React.useState('Todos');
-        const [collapsedCategories, setCollapsedCategories] = React.useState({});
-
-        // Mapeamento de categorias para cores - adicione mais conforme necessário
-        const categoryColors = {
-            'Suporte - PDV': 'bg-blue-500',
-            'Suporte - Fiscal': 'bg-red-500',
-            'Suporte - Retaguarda': 'bg-green-500',
-            'Suporte - Mobile': 'bg-purple-500',
-            'Sem Categoria': 'bg-gray-500',
-        };
-        const getCategoryColor = (category) => categoryColors[category] || 'bg-yellow-500';
-
-        React.useEffect(() => {
-            // Carregar preferências salvas
-            (async () => {
-                const savedLayout = await GM_getValue('beemore_layout_preference', 'tabs');
-                setLayout(savedLayout);
-            })();
-
-            const targetNode = document.querySelector('app-chat-list-container > section');
-            if (!targetNode) return;
-
-            const updateChats = () => {
-                const newChats = scrapeData();
-                setChats(newChats);
-            };
-
-            const observer = new MutationObserver((mutationsList) => {
-                for (const mutation of mutationsList) {
-                    if (mutation.type === 'childList' || mutation.type === 'attributes') {
-                        updateChats();
-                        break;
-                    }
+        if (chatHeaderElement) {
+            const titleElement = chatHeaderElement.querySelector('span > span');
+            if (titleElement && titleElement.parentElement) {
+                const fullTitleText = titleElement.parentElement.innerText;
+                const parts = fullTitleText.split(' - ');
+                if (parts.length > 1) {
+                    numero = parts[0].replace('#', '').trim();
+                    solicitante = parts.slice(1).join(' - ').trim();
                 }
-            });
-
-            observer.observe(targetNode, {
-                attributes: true,
-                childList: true,
-                subtree: true
-            });
-            updateChats(); // Carga inicial
-
-            return () => observer.disconnect();
-        }, []);
-
-        const toggleLayout = async () => {
-            const newLayout = layout === 'tabs' ? 'list' : 'tabs';
-            setLayout(newLayout);
-            await GM_setValue('beemore_layout_preference', newLayout);
-        };
-        
-        const toggleCategoryCollapse = (category) => {
-            setCollapsedCategories(prev => ({ ...prev, [category]: !prev[category] }));
-        };
-
-        const categories = [...new Set(chats.map(c => c.categoria))];
-        const filteredChats = activeTab === 'Todos' ? chats : chats.filter(c => c.categoria === activeTab);
-
-        return (
-            <div className="flex flex-col h-full bg-[#1c1823] text-white font-sans">
-                {/* Cabeçalho de Controle */}
-                <div className="flex items-center justify-between p-2 border-b border-gray-700 shrink-0">
-                    <h1 className="text-lg font-bold">Beemore+</h1>
-                    <button onClick={toggleLayout} className="p-2 rounded-md hover:bg-gray-700" title="Alternar Layout">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            {layout === 'tabs' ? <><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></> : <><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></>}
-                        </svg>
-                    </button>
-                </div>
-
-                {/* Layout de Abas */}
-                {layout === 'tabs' && (
-                    <div className="shrink-0 overflow-x-auto custom-scrollbar border-b border-gray-700">
-                        <div className="flex p-2 space-x-2">
-                            <button onClick={() => setActiveTab('Todos')} className={`px-3 py-1 text-sm rounded-full shrink-0 ${activeTab === 'Todos' ? 'bg-indigo-600' : 'bg-gray-700 hover:bg-gray-600'}`}>
-                                Todos <span className="ml-1 px-2 text-xs rounded-full bg-gray-500">{chats.length}</span>
-                            </button>
-                            {categories.map(cat => (
-                                <button key={cat} onClick={() => setActiveTab(cat)} className={`px-3 py-1 text-sm rounded-full shrink-0 ${activeTab === cat ? 'bg-indigo-600' : 'bg-gray-700 hover:bg-gray-600'}`}>
-                                    {cat.replace('Suporte - ', '')}
-                                    <span className={`ml-1 px-2 text-xs rounded-full ${getCategoryColor(cat)}`}>
-                                        {chats.filter(c => c.categoria === cat).length}
-                                    </span>
-                                </button>
-                            ))}
-                        </div>
-                    </div>
-                )}
-                
-                {/* Lista de Chats */}
-                <div className="flex-grow overflow-y-auto custom-scrollbar">
-                    {layout === 'tabs' && (activeTab !== 'Todos' ? filteredChats.map(chat => <ChatItem key={chat.id} chat={chat} categoryColor={getCategoryColor(chat.categoria)} />) : (
-                         categories.map(cat => (
-                             <div key={cat}>
-                                 <h2 className={`p-2 text-sm font-bold sticky top-0 bg-[#1c1823] ${getCategoryColor(cat)} text-white`}>
-                                     {cat} ({chats.filter(c => c.categoria === cat).length})
-                                 </h2>
-                                 {chats.filter(c => c.categoria === cat).map(chat => <ChatItem key={chat.id} chat={chat} categoryColor={getCategoryColor(chat.categoria)} />)}
-                             </div>
-                         ))
-                    ))}
-
-                    {layout === 'list' && (
-                        categories.map(cat => (
-                            <div key={cat}>
-                                <h2 onClick={() => toggleCategoryCollapse(cat)} className={`flex justify-between items-center p-2 text-sm font-bold sticky top-0 bg-[#1c1823] cursor-pointer ${getCategoryColor(cat)} text-white`}>
-                                    <span>{cat} ({chats.filter(c => c.categoria === cat).length})</span>
-                                     <svg className={`w-4 h-4 transition-transform ${collapsedCategories[cat] ? 'rotate-0' : 'rotate-90'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7"></path></svg>
-                                </h2>
-                                {!collapsedCategories[cat] && chats.filter(c => c.categoria === cat).map(chat => <ChatItem key={chat.id} chat={chat} categoryColor={getCategoryColor(chat.categoria)} />)}
-                            </div>
-                        ))
-                    )}
-                </div>
-            </div>
-        );
-    };
-
-    const ChatItem = ({ chat, categoryColor }) => {
-        const handleItemClick = () => {
-            if (chat.originalElement && typeof chat.originalElement.click === 'function') {
-                chat.originalElement.click();
             }
+        }
+
+        if (detailsContainer) {
+            const revendaElement = detailsContainer.querySelector('app-person-info h1, app-person-info [style*="font-size: 18px"]');
+            if (revendaElement) {
+                const tempDiv = document.createElement('div');
+                tempDiv.innerHTML = revendaElement.innerHTML;
+                tempDiv.querySelector('app-tag')?.remove();
+                revenda = tempDiv.innerText.trim();
+            }
+
+            const labels = Array.from(detailsContainer.querySelectorAll('app-label'));
+            const servicoLabel = labels.find(label => label.innerText.trim().toLowerCase() === 'serviço');
+            if (servicoLabel) {
+                servicoSelecionado = servicoLabel.nextElementSibling?.innerText.trim() || '';
+            }
+        }
+        return { analista, numero, revenda, solicitante, servicoSelecionado };
+    }
+
+    // =================================================================================
+    // FUNCIONALIDADE 1: REGISTRO DE SERVIÇO INCORRETO
+    // =================================================================================
+    function injetarBotaoRegistro() {
+        if (document.getElementById('crx-header-btn')) return;
+
+        const actionButtonsContainer = document.querySelector('app-chat-agent-header > div:last-of-type');
+        if (!actionButtonsContainer) return;
+
+        const referenceButton = actionButtonsContainer.querySelector('app-button[icon="tablerX"], app-button[text="Sair da conversa"]');
+
+        if (referenceButton) {
+            const ourButton = document.createElement('button');
+            ourButton.id = 'crx-header-btn';
+            ourButton.textContent = 'Serviço Incorreto';
+            ourButton.addEventListener('click', abrirModalRegistro);
+            referenceButton.parentElement.insertBefore(ourButton, referenceButton);
+        }
+    }
+
+    function observarTags() {
+        const detailsPanel = document.querySelector('app-chat-aside');
+        if (!detailsPanel || detailsPanel.getAttribute('data-crx-observed')) return;
+        const observer = new MutationObserver(() => {
+            const tagElement = detailsPanel.querySelector('app-tag span[style*="text-overflow: ellipsis"]');
+            if (tagElement && tagElement.innerText.trim().toLowerCase() === 'servico-incorreto') {
+                 abrirModalRegistro();
+                 observer.disconnect();
+                 detailsPanel.removeAttribute('data-crx-observed');
+            }
+        });
+        observer.observe(detailsPanel, { childList: true, subtree: true });
+        detailsPanel.setAttribute('data-crx-observed', 'true');
+    }
+
+    function abrirModalRegistro() {
+        if (document.getElementById('crx-modal')) return;
+        const data = capturarDadosPagina();
+        const modalHTML = `
+            <div id="crx-modal" class="crx-modal-overlay">
+                <div class="crx-modal-content">
+                    <h3>Registrar Atendimento Incorreto</h3>
+                    <form id="crx-atendimento-form">
+                        <input type="hidden" id="crx-analista" value="${data.analista}">
+                        <div class="crx-form-group"><label>Número</label><input type="text" id="crx-numero" value="${data.numero}" required></div>
+                        <div class="crx-form-group"><label>Revenda</label><input type="text" id="crx-revenda" value="${data.revenda}" required></div>
+                        <div class="crx-form-group"><label>Solicitante</label><input type="text" id="crx-solicitante" value="${data.solicitante}" required></div>
+                        <div class="crx-form-group">
+                            <label>Serviço Selecionado</label>
+                            <select id="crx-servico-selecionado" required>
+                                <option value="">Selecione...</option><option value="Suporte - Web">Suporte - Web</option><option value="Suporte - PDV">Suporte - PDV</option>
+                                <option value="Suporte - Retaguarda">Suporte - Retaguarda</option><option value="Suporte - Fiscal">Suporte - Fiscal</option><option value="Suporte - Mobile">Suporte - Mobile</option>
+                            </select>
+                        </div>
+                        <div class="crx-form-group">
+                            <label>Serviço Correto</label>
+                            <select id="crx-servico-correto" required>
+                                <option value="">Selecione...</option><option value="Suporte - Web">Suporte - Web</option><option value="Suporte - PDV">Suporte - PDV</option>
+                                <option value="Suporte - Retaguarda">Suporte - Retaguarda</option><option value="Suporte - Fiscal">Suporte - Fiscal</option><option value="Suporte - Mobile">Suporte - Mobile</option>
+                            </select>
+                        </div>
+                        <button type="submit" class="crx-btn">Salvar Atendimento</button>
+                        <div id="crx-status"></div>
+                    </form>
+                </div>
+            </div>`;
+        document.body.insertAdjacentHTML('beforeend', modalHTML);
+        if (document.body.classList.contains('dark')) {
+            document.querySelector('.crx-modal-content').classList.add('dark');
+        }
+        const servicoSelect = document.getElementById('crx-servico-selecionado');
+        for (let option of servicoSelect.options) {
+            if (option.text === data.servicoSelecionado) { option.selected = true; break; }
+        }
+        document.getElementById('crx-atendimento-form').addEventListener('submit', lidarComSubmitFormulario);
+        document.getElementById('crx-modal').addEventListener('click', (e) => {
+            if (e.target === e.currentTarget) fecharModalRegistro();
+        });
+    }
+
+    function fecharModalRegistro() {
+        const modal = document.getElementById('crx-modal');
+        if (modal) modal.remove();
+    }
+
+    function lidarComSubmitFormulario(e) {
+        e.preventDefault();
+        const statusDiv = document.getElementById('crx-status');
+        const atendimentoData = {
+            action: 'create', numero: document.getElementById('crx-numero').value,
+            revenda: document.getElementById('crx-revenda').value, solicitante: document.getElementById('crx-solicitante').value,
+            servicoSelecionado: document.getElementById('crx-servico-selecionado').value, servicoCorreto: document.getElementById('crx-servico-correto').value,
+            data: new Date().toISOString().split('T')[0], analista: document.getElementById('crx-analista').value
         };
-
-        const bgColor = chat.isSelected ? 'bg-indigo-800' : 'hover:bg-gray-800';
-
-        return (
-            <div onClick={handleItemClick} className={`flex items-center p-2 cursor-pointer border-b border-gray-800 transition-colors ${bgColor}`}>
-                <div className="relative mr-3 shrink-0">
-                    <div className="w-12 h-12 rounded-full overflow-hidden bg-gray-600 flex items-center justify-center">
-                        {chat.avatarUrl ? (
-                            <img src={chat.avatarUrl} alt="avatar" className="w-full h-full object-cover" />
-                        ) : (
-                            <span className="text-xl font-bold text-white">{chat.solicitante.charAt(0)}</span>
-                        )}
-                    </div>
-                     <div className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-[#1c1823] ${categoryColor}`}></div>
-                </div>
-                <div className="flex-grow overflow-hidden">
-                    <div className="flex items-center justify-between">
-                        <p className="font-bold truncate text-sm">{chat.solicitante}</p>
-                        {chat.hasNotification && (
-                             <span className="w-3 h-3 bg-orange-500 rounded-full shrink-0"></span>
-                        )}
-                    </div>
-                    <p className="text-xs text-gray-400 truncate">{chat.revenda}</p>
-                </div>
-            </div>
-        );
-    };
-
-    //--- LÓGICA DE INICIALIZAÇÃO E AUTO-REFRESH ---//
-    let inactivityTimer;
-    
-    function resetInactivityTimer() {
-        clearTimeout(inactivityTimer);
-        inactivityTimer = setTimeout(performAutoRefresh, INACTIVITY_REFRESH_SECONDS * 1000);
-    }
-    
-    function isUserInActiveChat() {
-        // Se o template de "nenhum chat selecionado" está visível, o usuário não está em um chat.
-        return !document.querySelector('app-empty-template');
+        statusDiv.textContent = 'Salvando...';
+        GM_xmlhttpRequest({
+            method: 'POST', url: API_URL, headers: { 'Content-Type': 'application/json' }, data: JSON.stringify(atendimentoData),
+            onload: function(response) {
+                try {
+                    const result = JSON.parse(response.responseText);
+                    statusDiv.textContent = result.success || `Falha: ${result.error || 'Erro desconhecido'}`;
+                    statusDiv.style.color = result.success ? 'green' : 'red';
+                    if (result.success) setTimeout(fecharModalRegistro, 1500);
+                } catch (err) { statusDiv.textContent = 'Erro ao processar resposta da API.'; statusDiv.style.color = 'red'; }
+            },
+            onerror: function() { statusDiv.textContent = 'Falha de conexão com a API.'; statusDiv.style.color = 'red'; }
+        });
     }
 
-    function performAutoRefresh() {
-        if (isUserInActiveChat()) {
-            console.log('Beemore+: Auto-refresh adiado, usuário em chat ativo.');
-            resetInactivityTimer(); // Adia o refresh
-            return;
-        }
-
-        console.log('Beemore+: Realizando auto-refresh por inatividade.');
-        const dashboardButton = document.querySelector('[data-sidebar-option="dashboard"]');
-        const chatButton = document.querySelector('[data-sidebar-option="entities.chat"]');
-
-        if (dashboardButton && chatButton) {
-            dashboardButton.click();
-            setTimeout(() => {
-                chatButton.click();
-                resetInactivityTimer(); // Reinicia o timer após o refresh
-            }, 500);
-        }
-    }
-    
-    function addVersionIndicator() {
-        const sidebar = document.querySelector('app-sidebar section:last-of-type');
-        if (sidebar && !document.getElementById('bplus-indicator')) {
-            const indicator = document.createElement('div');
-            indicator.id = 'bplus-indicator';
-            indicator.className = 'relative flex items-center justify-center w-9 h-9 cursor-pointer text-white font-bold text-lg bg-indigo-600 rounded-md';
-            indicator.textContent = 'B+';
-            
-            const tooltip = document.createElement('div');
-            tooltip.className = 'tooltip';
-            tooltip.innerHTML = `Versão: ${SCRIPT_VERSION}<br>Status: Operacional`;
-            
-            indicator.appendChild(tooltip);
-            sidebar.appendChild(indicator);
-        }
+    // =================================================================================
+    // FUNCIONALIDADE 2: MELHORIAS DE INTERFACE
+    // =================================================================================
+    function adicionarBotaoDeAtualizacao(container) {
+        if (document.getElementById('custom-refresh-btn')) return;
+        let refreshBtn = document.createElement('button');
+        refreshBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>';
+        refreshBtn.id = 'custom-refresh-btn';
+        refreshBtn.title = 'Atualizar listas de chat';
+        Object.assign(refreshBtn.style, { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '2rem', width: '2rem', marginLeft: '0.5rem', borderRadius: '0.25rem', cursor: 'pointer' });
+        refreshBtn.onclick = () => {
+            atualizarListasDeChat();
+            setTimeout(aplicarCustomizacoes, 1200);
+        };
+        container.appendChild(refreshBtn);
     }
 
-
-    function initialize() {
-        const chatListContainer = document.querySelector('app-chat-list-container');
-        if (!chatListContainer) {
-            // Se não estamos na página de chat, não faz nada.
-            return;
-        }
-
-        const originalSection = chatListContainer.querySelector('section');
-        if (!originalSection || document.getElementById('beemore-plus-root')) {
-            // Se a seção original não existe ou nosso script já rodou, sai.
-            return;
-        }
-
-        console.log('Beemore+: Inicializando a nova interface.');
-
-        injectTailwind();
-        
-        // Esconde a interface original
-        chatListContainer.style.display = 'none';
-
-        // Cria o ponto de montagem para o React
-        const reactRootContainer = document.createElement('div');
-        reactRootContainer.id = 'beemore-plus-root';
-        // Usa a mesma largura que o container original para manter o layout da página
-        reactRootContainer.style.width = chatListContainer.style.width || '23rem'; 
-        reactRootContainer.style.height = '100%';
-        chatListContainer.parentNode.insertBefore(reactRootContainer, chatListContainer);
-        
-        // Transpila o JSX e renderiza o app React
-        const jsxCode = `
-            ReactDOM.createRoot(document.getElementById('beemore-plus-root')).render(
-                <React.StrictMode>
-                    <App />
-                </React.StrictMode>
-            );
-        `;
-        const transpiledCode = Babel.transform(jsxCode, {
-            presets: ['react']
-        }).code;
-        
-        // Criando variáveis globais temporárias para o escopo do script
-        window.React = React;
-        window.ReactDOM = ReactDOM;
-        window.App = App;
-        window.ChatItem = ChatItem;
-
-        const scriptElement = document.createElement('script');
-        scriptElement.type = 'text/javascript';
-        scriptElement.textContent = transpiledCode;
-        document.body.appendChild(scriptElement);
-        
-        // Limpando as variáveis globais
-        delete window.App;
-        delete window.ChatItem;
-        
-        // Adiciona o indicador de versão
-        addVersionIndicator();
-        
-        // Inicia o timer de inatividade
-        document.addEventListener('mousemove', resetInactivityTimer);
-        document.addEventListener('keydown', resetInactivityTimer);
-        resetInactivityTimer();
+    function atualizarListasDeChat() {
+        document.querySelectorAll('app-chat-list > header').forEach((header, index) => {
+            const iconeChevron = header.querySelector('app-icon[icon="tablerChevronRight"]');
+            if (iconeChevron && iconeChevron.classList.contains('rotate-90')) {
+                setTimeout(() => { header.click(); setTimeout(() => header.click(), 200); }, index * 250);
+            }
+        });
     }
-    
-    // Roda o script quando a URL muda (para Single Page Applications como o Beemore)
-    let lastUrl = location.href;
-    new MutationObserver(() => {
-        const url = location.href;
-        if (url !== lastUrl) {
-            lastUrl = url;
-            // Espera um pouco para a página carregar o novo conteúdo
-            setTimeout(initialize, 1000);
-        }
-    }).observe(document.body, { childList: true, subtree: true });
-    
-    // Roda na carga inicial da página
-    window.addEventListener('load', () => {
-        setTimeout(initialize, 2000); // Atraso para garantir que a UI do Beemore foi carregada
-    });
 
+    function aplicarDestaquesECores() {
+        document.querySelectorAll('app-chat-list-item').forEach(item => {
+            item.className = item.className.replace(/\bcrx-category-\S+/g, '');
+            const hasAlert = !!item.querySelector('app-icon[icon="tablerAlertCircle"]');
+            const isAguardando = !!item.querySelector('span[class*="text-orange"]');
+            const categoryElement = item.querySelector('section > div:first-of-type > span:last-of-type');
+            const category = categoryElement ? categoryElement.textContent.trim() : 'default';
+            const categoryClass = `crx-category-${category.replace(/[\s-]+/g, '-').toLowerCase()}`;
+            item.classList.add(categoryClass);
+            item.classList.toggle('crx-chat-highlight', hasAlert);
+            item.classList.toggle('crx-chat-aguardando', !hasAlert && isAguardando);
+        });
+    }
+
+    function agruparEOrdenarChats() {
+        const othersHeader = Array.from(document.querySelectorAll('app-chat-list > header')).find(h => h.querySelector('span')?.textContent.trim() === 'Outros');
+        if (!othersHeader) return;
+        const othersContainer = othersHeader.nextElementSibling;
+        if (!othersContainer || othersContainer.getAttribute('data-crx-grouped') === 'true') return;
+        const items = Array.from(othersContainer.querySelectorAll('app-chat-list-item'));
+        if (items.length === 0) return;
+        const groups = new Map();
+        items.forEach(item => {
+            const category = item.querySelector('section > div:first-of-type > span:last-of-type')?.textContent.trim() || 'Sem Categoria';
+            if (!groups.has(category)) groups.set(category, []);
+            groups.get(category).push(item);
+        });
+        const sortedGroups = new Map([...groups.entries()].sort());
+        othersContainer.innerHTML = '';
+        sortedGroups.forEach((groupItems, category) => {
+            const header = document.createElement('div');
+            header.className = 'crx-group-header';
+            header.textContent = category;
+            othersContainer.appendChild(header);
+            groupItems.sort((a, b) => {
+                const aP = a.classList.contains('crx-chat-highlight') ? 2 : (a.classList.contains('crx-chat-aguardando') ? 1 : 0);
+                const bP = b.classList.contains('crx-chat-highlight') ? 2 : (b.classList.contains('crx-chat-aguardando') ? 1 : 0);
+                return bP - aP;
+            });
+            groupItems.forEach(item => othersContainer.appendChild(item));
+        });
+        othersContainer.setAttribute('data-crx-grouped', 'true');
+    }
+
+    // =================================================================================
+    // LOOP PRINCIPAL E INICIALIZAÇÃO
+    // =================================================================================
+    function aplicarCustomizacoes() {
+        aplicarDestaquesECores();
+        agruparEOrdenarChats();
+
+        if (document.querySelector('app-chat-agent-header')) {
+            injetarBotaoRegistro();
+            observarTags();
+        }
+    }
+
+    function inicializar() {
+        injetarEstilos();
+        const observer = new MutationObserver(() => {
+            const targetContainer = document.querySelector('app-chat-list-container > div.flex.items-center');
+            if (targetContainer && !document.getElementById('custom-refresh-btn')) {
+                adicionarBotaoDeAtualizacao(targetContainer);
+            }
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+        setInterval(aplicarCustomizacoes, 1500);
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', inicializar);
+    } else {
+        inicializar();
+    }
 })();
