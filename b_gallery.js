@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @version      1.0
 // @description  Adiciona uma galeria de imagens funcional para chats e tickets na plataforma Beemore.
-// @author       Seu Nome & Gemini
+// @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
 // @grant        GM_addStyle
 // ==/UserScript==
