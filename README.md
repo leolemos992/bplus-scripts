@@ -23,7 +23,7 @@ A forma mais fácil de instalar um script deste repositório é através do link
 | --------------------- | ------------------------------------------------------------------------------------------------ |
 | **Restaurador Beemore** | [Instalar](https://github.com/leolemos992/bplus-scripts/raw/main/restaurador.js)                   |
 | **Galeria B-Plus**      | [Instalar](https://github.com/leolemos992/bplus-scripts/raw/main/b_gallery.js)                     |
-| **Script Geral B-Plus** | [Instalar](https://github.com/leolemos992/bplus-scripts/raw/main/bplus-script.user.js)             |
+| **Descrição Anexos** | [Instalar](https://github.com/leolemos992/bplus-scripts/raw/main/descricao_anexo.js)             |
 | **Serviço Incorreto**   | [Instalar](https://github.com/leolemos992/bplus-scripts/raw/main/servicoincorreto.js)               |
 
 Após clicar em "Instalar", uma nova aba do Tampermonkey será aberta. Apenas clique no botão **"Instalar"** para confirmar.
@@ -36,7 +36,7 @@ Após clicar em "Instalar", uma nova aba do Tampermonkey será aberta. Apenas cl
 | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | `restaurador.js`      | **(Restaurador)** Injeta um botão "Restaurar Base" na tela de tickets para automatizar o processo de restauração de bancos de dados.   |
 | `b_gallery.js`        | **(B-Plus)** Melhora a visualização da imagens dentro do Beemore como uma galeria, permitindo alternar entre imagens.                  |
-| `bplus-script.user.js`| **(B-Plus)** Melhorias visuais para a tela de chats.                                                                                   |
+| `descricao_anexo.js`| **(B-Plus)** Inclui campo para descrever um anexo na tela de chats                                                                       |
 | `servicoincorreto.js` | **(Beemore/B-Plus)** Permite a contabilização de serviço incorreto, através de um botão na tela de chats.                              |
 
 ## 🛠️ Como Contribuir
