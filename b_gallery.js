@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         B.Gallery! - Galeria para Beemore
 // @namespace    http://tampermonkey.net/
-// @version      1.0
+// @version      1.1
 // @description  Adiciona uma galeria de imagens funcional para chats e tickets na plataforma Beemore.
 // @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
@@ -209,11 +209,19 @@
         document.addEventListener('keydown', (event) => {
             // Só executa se a galeria estiver visível
             if (document.getElementById('b-gallery-overlay').classList.contains('visible')) {
-                if (event.key === 'ArrowRight') nextImage();
-                if (event.key === 'ArrowLeft') prevImage();
-                if (event.key === 'Escape') closeCarousel();
+                if (event.key === 'ArrowRight') {
+                    nextImage();
+                } else if (event.key === 'ArrowLeft') {
+                    prevImage();
+                } else if (event.key === 'Escape') {
+                    // Impede que o evento continue se propagando para outros listeners (como o do Beemore)
+                    event.stopPropagation();
+                    // Previne qualquer ação padrão do navegador para a tecla 'Escape'
+                    event.preventDefault();
+                    closeCarousel();
+                }
             }
-        });
+        }, true); // Adicionado 'true' para capturar o evento na fase de "captura", garantindo prioridade.
     }
 
     // Garante que o script só rode depois que a página estiver totalmente carregada
