@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         B.Gallery! - Galeria para Beemore
 // @namespace    http://tampermonkey.net/
-// @version      1.1
-// @description  Adiciona uma galeria de imagens funcional para chats e tickets na plataforma Beemore.
+// @version      1.2
+// @description  Adiciona uma galeria de imagens funcional com miniaturas para chats e tickets na plataforma Beemore.
 // @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
 // @grant        GM_addStyle
@@ -35,6 +35,7 @@
                 display: flex;
                 align-items: center;
                 justify-content: center;
+                flex-direction: column; /* Organiza conteúdo principal e miniaturas verticalmente */
                 opacity: 0;
                 transition: opacity 0.3s ease;
                 pointer-events: none; /* Ignora cliques quando invisível */
@@ -44,63 +45,77 @@
                 opacity: 1;
                 pointer-events: all;
             }
+            /* Contêiner da imagem principal */
+             #b-gallery-content {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                flex-grow: 1; /* Permite que a imagem ocupe o espaço disponível */
+                position: relative;
+                width: 100%;
+            }
             /* A imagem principal da galeria */
             #b-gallery-image {
-                max-height: 90vh;
+                max-height: 80vh; /* Reduzido para dar espaço às miniaturas */
                 max-width: 90vw;
                 user-select: none;
                 border-radius: 4px;
                 transition: transform 0.2s ease;
             }
+            /* Contêiner das miniaturas */
+            #b-gallery-thumbnails {
+                height: 80px; /* Altura da faixa de miniaturas */
+                width: 90vw;
+                padding: 10px 0;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                gap: 8px;
+                overflow-x: auto; /* Permite rolagem horizontal se houver muitas imagens */
+                flex-shrink: 0; /* Impede que o contêiner encolha */
+            }
+            /* Estilo da barra de rolagem (opcional, mas melhora a aparência) */
+            #b-gallery-thumbnails::-webkit-scrollbar { height: 8px; }
+            #b-gallery-thumbnails::-webkit-scrollbar-track { background: rgba(255,255,255,0.1); border-radius: 4px; }
+            #b-gallery-thumbnails::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.3); border-radius: 4px; }
+            #b-gallery-thumbnails::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.5); }
+            /* Estilo de cada miniatura */
+            .b-gallery-thumb {
+                height: 60px;
+                border-radius: 4px;
+                cursor: pointer;
+                opacity: 0.5;
+                transition: opacity 0.2s ease, border 0.2s ease;
+                border: 2px solid transparent;
+            }
+            .b-gallery-thumb:hover {
+                opacity: 0.8;
+            }
+            /* Estilo da miniatura ativa */
+            .b-gallery-thumb.active {
+                opacity: 1;
+                border: 2px solid #fff;
+            }
             /* Botões de navegação (Anterior/Próximo) */
             .b-gallery-nav {
-                cursor: pointer;
-                position: absolute;
-                top: 50%;
-                transform: translateY(-50%);
-                padding: 10px 18px;
-                color: white;
-                font-weight: bold;
-                font-size: 28px;
-                transition: 0.3s;
-                user-select: none;
-                background: rgba(0, 0, 0, 0.3);
-                border-radius: 50%;
-                line-height: 1;
-                display: flex;
-                align-items: center;
-                justify-content: center;
+                cursor: pointer; position: absolute; top: 50%; transform: translateY(-50%); padding: 10px 18px;
+                color: white; font-weight: bold; font-size: 28px; transition: 0.3s; user-select: none;
+                background: rgba(0, 0, 0, 0.3); border-radius: 50%; line-height: 1; display: flex;
+                align-items: center; justify-content: center; z-index: 10001;
             }
-            .b-gallery-nav:hover {
-                background: rgba(0, 0, 0, 0.6);
-            }
+            .b-gallery-nav:hover { background: rgba(0, 0, 0, 0.6); }
             #b-gallery-prev { left: 20px; }
             #b-gallery-next { right: 20px; }
             /* Botão para fechar a galeria */
             #b-gallery-close {
-                position: absolute;
-                top: 15px;
-                right: 35px;
-                color: #f1f1f1;
-                font-size: 40px;
-                font-weight: bold;
-                cursor: pointer;
-                transition: 0.3s;
+                position: absolute; top: 15px; right: 35px; color: #f1f1f1;
+                font-size: 40px; font-weight: bold; cursor: pointer; transition: 0.3s; z-index: 10002;
             }
-            #b-gallery-close:hover {
-                color: #bbb;
-            }
+            #b-gallery-close:hover { color: #bbb; }
             /* Contador de imagens (ex: "3 / 10") */
             #b-gallery-counter {
-                position: absolute;
-                top: 20px;
-                left: 50%;
-                transform: translateX(-50%);
-                color: white;
-                font-size: 16px;
-                padding: 5px 10px;
-                background: rgba(0, 0, 0, 0.5);
-                border-radius: 5px;
+                position: absolute; top: 20px; left: 50%; transform: translateX(-50%); color: white;
+                font-size: 16px; padding: 5px 10px; background: rgba(0, 0, 0, 0.5); border-radius: 5px; z-index: 10002;
             }
         `);
     }
@@ -109,18 +124,18 @@
     // 2. INJEÇÃO DOS ELEMENTOS HTML DA GALERIA
     // =================================================================================
     function injetarHTML() {
-        // Evita injetar o HTML mais de uma vez
         if (document.getElementById('b-gallery-overlay')) return;
 
         const galleryHTML = `
             <div id="b-gallery-overlay">
                 <span id="b-gallery-close">&times;</span>
-                <a id="b-gallery-prev" class="b-gallery-nav">&#10094;</a>
-                <a id="b-gallery-next" class="b-gallery-nav">&#10095;</a>
+                <span id="b-gallery-counter"></span>
                 <div id="b-gallery-content">
+                    <a id="b-gallery-prev" class="b-gallery-nav">&#10094;</a>
                     <img id="b-gallery-image" src="">
-                    <div id="b-gallery-counter"></div>
+                    <a id="b-gallery-next" class="b-gallery-nav">&#10095;</a>
                 </div>
+                <div id="b-gallery-thumbnails"></div>
             </div>`;
         document.body.insertAdjacentHTML('beforeend', galleryHTML);
     }
@@ -129,46 +144,61 @@
     // 3. FUNÇÕES DE CONTROLE DA GALERIA
     // =================================================================================
 
-    // Mostra uma imagem específica com base no seu índice
+    // Mostra uma imagem específica e atualiza a miniatura ativa
     function showImage(index) {
         if (index >= 0 && index < allImageUrls.length) {
             currentImageIndex = index;
             document.getElementById('b-gallery-image').src = allImageUrls[index];
             document.getElementById('b-gallery-counter').textContent = `${index + 1} / ${allImageUrls.length}`;
+
+            // Atualiza a classe 'active' nas miniaturas
+            const oldActiveThumb = document.querySelector('.b-gallery-thumb.active');
+            if (oldActiveThumb) {
+                oldActiveThumb.classList.remove('active');
+            }
+            const newActiveThumb = document.querySelector(`.b-gallery-thumb[data-index='${index}']`);
+            if (newActiveThumb) {
+                newActiveThumb.classList.add('active');
+                // Garante que a miniatura ativa esteja sempre visível na barra de rolagem
+                newActiveThumb.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+            }
         }
     }
 
-    // Abre a galeria ao clicar em uma imagem
+    // Cria as miniaturas e abre a galeria
     function openCarousel(clickedElement) {
-        // Encontra o contêiner pai (seja um chat ou um ticket) para buscar todas as imagens
         const container = clickedElement.closest('app-chat-virtual-scroll, app-item-panel');
         if (!container) return;
 
-        // Cria uma lista com o URL de todas as imagens clicáveis dentro do contêiner
         allImageUrls = Array.from(container.querySelectorAll('img.image-clickable')).map(img => img.src);
-
         const clickedImageSrc = clickedElement.src;
         const initialIndex = allImageUrls.indexOf(clickedImageSrc);
 
-        // Se a imagem clicada não for encontrada na lista, não faz nada
         if (initialIndex === -1) return;
 
-        // Mostra a imagem clicada e torna a galeria visível
+        // --- GERAÇÃO DAS MINIATURAS ---
+        const thumbnailsContainer = document.getElementById('b-gallery-thumbnails');
+        thumbnailsContainer.innerHTML = ''; // Limpa miniaturas antigas
+        allImageUrls.forEach((url, index) => {
+            const thumb = document.createElement('img');
+            thumb.src = url;
+            thumb.classList.add('b-gallery-thumb');
+            thumb.dataset.index = index; // Guarda o índice para o clique
+            thumbnailsContainer.appendChild(thumb);
+        });
+
         showImage(initialIndex);
         document.getElementById('b-gallery-overlay').classList.add('visible');
     }
 
-    // Fecha a galeria
     function closeCarousel() {
         document.getElementById('b-gallery-overlay').classList.remove('visible');
     }
 
-    // Navega para a próxima imagem (com loop)
     function nextImage() {
         showImage((currentImageIndex + 1) % allImageUrls.length);
     }
 
-    // Navega para a imagem anterior (com loop)
     function prevImage() {
         showImage((currentImageIndex - 1 + allImageUrls.length) % allImageUrls.length);
     }
@@ -182,49 +212,46 @@
         injetarHTML();
 
         // --- Adiciona os "escutadores" de eventos ---
-
-        // 1. Escuta cliques em qualquer lugar do corpo da página
         document.body.addEventListener('click', (event) => {
-            // Verifica se o alvo do clique foi uma imagem com a classe 'image-clickable'
             const clickedImage = event.target.closest('img.image-clickable');
             if (clickedImage) {
-                event.preventDefault(); // Impede ações padrão do navegador
-                event.stopPropagation(); // Impede que o clique se propague para outros elementos
+                event.preventDefault();
+                event.stopPropagation();
                 openCarousel(clickedImage);
             }
-        }, true); // O 'true' garante que o evento seja capturado antes de outras ações do site
+        }, true);
 
-        // 2. Escuta cliques nos elementos da galeria
         document.getElementById('b-gallery-close').addEventListener('click', closeCarousel);
         document.getElementById('b-gallery-next').addEventListener('click', nextImage);
         document.getElementById('b-gallery-prev').addEventListener('click', prevImage);
         document.getElementById('b-gallery-overlay').addEventListener('click', (event) => {
-            // Fecha a galeria se o clique for no fundo escuro, e não na imagem ou botões
             if (event.target.id === 'b-gallery-overlay') {
                 closeCarousel();
             }
         });
 
-        // 3. Escuta eventos do teclado para navegação
+        // Evento de clique para as miniaturas (usando delegação de evento)
+        document.getElementById('b-gallery-thumbnails').addEventListener('click', (event) => {
+            const thumb = event.target.closest('.b-gallery-thumb');
+            if (thumb && thumb.dataset.index) {
+                const index = parseInt(thumb.dataset.index, 10);
+                showImage(index);
+            }
+        });
+
         document.addEventListener('keydown', (event) => {
-            // Só executa se a galeria estiver visível
             if (document.getElementById('b-gallery-overlay').classList.contains('visible')) {
-                if (event.key === 'ArrowRight') {
-                    nextImage();
-                } else if (event.key === 'ArrowLeft') {
-                    prevImage();
-                } else if (event.key === 'Escape') {
-                    // Impede que o evento continue se propagando para outros listeners (como o do Beemore)
+                if (event.key === 'ArrowRight') { nextImage(); }
+                else if (event.key === 'ArrowLeft') { prevImage(); }
+                else if (event.key === 'Escape') {
                     event.stopPropagation();
-                    // Previne qualquer ação padrão do navegador para a tecla 'Escape'
                     event.preventDefault();
                     closeCarousel();
                 }
             }
-        }, true); // Adicionado 'true' para capturar o evento na fase de "captura", garantindo prioridade.
+        }, true);
     }
 
-    // Garante que o script só rode depois que a página estiver totalmente carregada
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', inicializar);
     } else {
