@@ -1,10 +1,12 @@
 // ==UserScript==
 // @name         Beemore - Botão Serviço Incorreto
 // @namespace    http://tampermonkey.net/
-// @version      1.0
+// @version      1.1
 // @description  Adiciona o botão 'Serviço Incorreto' para registrar atendimentos categorizados erradamente.
 // @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
+// @updateURL    https://raw.githubusercontent.com/leolemos992/bplus-scripts/main/servicoincorreto.js
+// @downloadURL  https://raw.githubusercontent.com/leolemos992/bplus-scripts/main/servicoincorreto.js
 // @grant        GM_xmlhttpRequest
 // @grant        GM_addStyle
 // @connect      10.1.11.15
