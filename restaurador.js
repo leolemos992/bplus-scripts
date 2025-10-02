@@ -1,10 +1,12 @@
 // ==UserScript==
 // @name         Beemore Restaurador de Base
 // @namespace    http://tampermonkey.net/
-// @version      1.8
+// @version      1.9
 // @description  Botão para restaurar base, com layout ajustado e botão de verificação desabilitado.
 // @author       Jose Leonardo Lemos, Panca
 // @match        https://*.beemore.com/*
+// @updateURL    https://raw.githubusercontent.com/leolemos992/bplus-scripts/main/restaurador.js
+// @downloadURL  https://raw.githubusercontent.com/leolemos992/bplus-scripts/main/restaurador.js
 // @grant        GM_xmlhttpRequest
 // @grant        GM_addStyle
 // @connect      *
