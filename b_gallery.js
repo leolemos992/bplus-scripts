@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         B.Gallery! - Galeria para Beemore
 // @namespace    http://tampermonkey.net/
-// @version      1.2
+// @version      1.3
 // @description  Adiciona uma galeria de imagens funcional com miniaturas para chats e tickets na plataforma Beemore.
 // @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
