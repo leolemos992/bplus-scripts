@@ -6,6 +6,9 @@
 // @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
 // @grant        GM_addStyle
+// @updateURL    https://raw.githubusercontent.com/leolemos992/bplus-scripts/main/b_gallery.js
+// @downloadURL  https://raw.githubusercontent.com/leolemos992/bplus-scripts/main/b_gallery.js
+// @supportURL   https://github.com/leolemos992/bplus-scripts/issues
 // ==/UserScript==
 
 (function() {
