@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Adicionar Descrição em Anexos - Beemore (Corrigido)
 // @namespace    http://tampermonkey.net/
-// @version      1.1
+// @version      1.2
 // @description  Adiciona um campo de texto para descrever anexos APENAS na pop-up de anexos do Beemore.
 // @author       Jose Leonardo Lemos
 // @match        https://*.beemore.com/*
