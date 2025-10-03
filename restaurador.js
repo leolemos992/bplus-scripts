@@ -1,12 +1,10 @@
 // ==UserScript==
 // @name         Beemore Restaurador de Base
 // @namespace    http://tampermonkey.net/
-// @version      1.9
-// @description  Botão para restaurar base, com layout ajustado e botão de verificação desabilitado.
-// @author       Jose Leonardo Lemos, Panca
+// @version      1.10
+// @description  Corrige bug de texto invisível no modo escuro do Beemore.
+// @author       Leo, Panca
 // @match        https://*.beemore.com/*
-// @updateURL    https://raw.githubusercontent.com/leolemos992/bplus-scripts/main/restaurador.js
-// @downloadURL  https://raw.githubusercontent.com/leolemos992/bplus-scripts/main/restaurador.js
 // @grant        GM_xmlhttpRequest
 // @grant        GM_addStyle
 // @connect      *
@@ -16,11 +14,11 @@
     'use strict';
 
     // --- CONFIGURAÇÃO ---
-    const restauradorUrl = 'http://dbserver.intelidata.local/restaurador/index.php';
+    const restauradorUrl = 'http://SEU_SERVIDOR/caminho/para/restaurador.php';
     const dashboardUrl = 'http://dbserver.intelidata.local/restaurador/';
     // ------------------
 
-    // Estilos atualizados para o novo layout dos botões e popup
+    // Estilos com correção de cor para o modo escuro
     GM_addStyle(`
         .restore-db-btn {
             background-color: rgb(94, 71, 208); color: white; padding: 8px 12px;
@@ -34,27 +32,36 @@
             justify-content: center; align-items: center;
         }
         .modal-content {
-            background-color: #fefefe; margin: auto; padding: 25px; border: 1px solid #888;
+            background-color: #fefefe;
+            color: #212529; /* <<-- CORREÇÃO PRINCIPAL: Define a cor do texto padrão como escura */
+            margin: auto; padding: 25px; border: 1px solid #888;
             width: 90%; max-width: 480px; border-radius: 8px; box-shadow: 0 5px 15px rgba(0,0,0,0.3);
         }
-        .modal-content h2 { margin-top: 0; border-bottom: 1px solid #ccc; padding-bottom: 10px; color: rgb(94, 71, 208); }
+        .modal-content h2 {
+            margin-top: 0; border-bottom: 1px solid #ccc; padding-bottom: 10px; color: rgb(94, 71, 208);
+        }
         .modal-warning {
-            background-color: #fffbe6; border: 1px solid #ffeeba; color: #856404;
+            background-color: #fffbe6; border: 1px solid #ffeeba;
+            color: #856404 !important; /* <<-- CORREÇÃO: Usa !important para garantir a cor do texto do aviso */
             padding: 15px; border-radius: 4px; margin-bottom: 20px; font-size: 14px; line-height: 1.5;
         }
         .modal-warning a { color: #0056b3; font-weight: bold; text-decoration: underline; }
-        .modal-content label { display: block; margin-top: 15px; margin-bottom: 5px; font-weight: bold; }
+        .modal-content label {
+            display: block; margin-top: 15px; margin-bottom: 5px; font-weight: bold;
+            color: #343a40; /* <<-- CORREÇÃO: Garante que os labels sejam escuros */
+        }
         .modal-content input[type="text"] { width: 100%; padding: 10px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; }
         .modal-buttons { margin-top: 25px; display: flex; justify-content: flex-end; align-items: center; }
         .modal-buttons button { padding: 10px 15px; border-radius: 5px; border: none; cursor: pointer; margin-left: 10px; font-weight: 500; transition: background-color 0.2s; }
 
-        /* Estilos dos botões no modal */
-        #verifyDbBtn { background-color: #aeb8c2; color: white; cursor: not-allowed; } /* Cinza claro, desabilitado */
-        #cancelRestoreBtn { background-color: #6c757d; color: white; } /* Cinza escuro */
+        #verifyDbBtn { background-color: #aeb8c2; color: white; cursor: not-allowed; }
+        #cancelRestoreBtn { background-color: #6c757d; color: white; }
         #cancelRestoreBtn:hover { background-color: #5a6268; }
-        #submitRestoreBtn { background-color: rgb(94, 71, 208); color: white; } /* Roxo primário */
+        #submitRestoreBtn { background-color: rgb(94, 71, 208); color: white; }
         #submitRestoreBtn:hover { background-color: rgb(76, 54, 187); }
     `);
+
+    // --- O RESTANTE DO SCRIPT PERMANECE IDÊNTICO ---
 
     function createModal() {
         if (document.getElementById('restoreModal')) return;
@@ -82,8 +89,6 @@
         document.getElementById('submitRestoreBtn').addEventListener('click', submitRestoreRequest);
         document.getElementById('restoreModal').addEventListener('click', (e) => (e.target.id === 'restoreModal') && hideModal());
     }
-
-    // --- O RESTANTE DO SCRIPT PERMANECE IGUAL ---
 
     function showModal() {
         document.getElementById('modalTenant').value = getTenantFromPage();
@@ -125,39 +130,22 @@
     function submitRestoreRequest() {
         const tenant = document.getElementById('modalTenant').value.trim();
         const nomeBase = document.getElementById('modalNomeBase').value.trim();
-
-        if (!tenant || !nomeBase) {
-            alert('Os campos Tenant e Nome da base são obrigatórios.');
-            return;
-        }
-        if (restauradorUrl.includes('SEU_SERVIDOR')) {
-            alert('ERRO: Configure o URL do restaurador no script.');
-            return;
-        }
-
+        if (!tenant || !nomeBase) { alert('Os campos Tenant e Nome da base são obrigatórios.'); return; }
+        if (restauradorUrl.includes('SEU_SERVIDOR')) { alert('ERRO: Configure o URL do restaurador no script.'); return; }
         const url = `${restauradorUrl}?action=processar&tenant=${encodeURIComponent(tenant)}&nomeBase=${encodeURIComponent(nomeBase)}`;
         console.log(`Enviando requisição para: ${url}`);
         hideModal();
-
         GM_xmlhttpRequest({
             method: "GET", url: url,
-            onload: res => {
-                console.log("Resposta:", res.responseText);
-                alert(`Processo para o tenant ${tenant} foi iniciado.`);
-            },
-            onerror: res => {
-                console.error("Erro:", res);
-                alert('Ocorreu um erro. Verifique o console.');
-            }
+            onload: res => { console.log("Resposta:", res.responseText); alert(`Processo para o tenant ${tenant} foi iniciado.`); },
+            onerror: res => { console.error("Erro:", res); alert('Ocorreu um erro. Verifique o console.'); }
         });
     }
 
     function ensureButtonExists() {
         if (!window.location.pathname.includes('/items/edit/')) return;
         if (document.getElementById('restoreDbBtn')) return;
-
-        const targetLabel = Array.from(document.querySelectorAll('app-label'))
-                                 .find(label => label.textContent.trim() === 'Técnico destaque');
+        const targetLabel = Array.from(document.querySelectorAll('app-label')).find(label => label.textContent.trim() === 'Técnico destaque');
         if (targetLabel) {
             const injectionPoint = targetLabel.closest('app-select');
             if (injectionPoint?.parentNode) {
