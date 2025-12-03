@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Beemore Restaurador de Base
+// @name         Beemore Restaurador de Base (v2.0)
 // @namespace    http://tampermonkey.net/
-// @version      1.10
-// @description  Corrige bug de texto invisível no modo escuro do Beemore.
+// @version      2.0
+// @description  Restaurador de base com UI nativa e memória de Tenant.
 // @author       Leo, Panca
 // @match        https://*.beemore.com/*
 // @grant        GM_xmlhttpRequest
@@ -10,157 +10,254 @@
 // @connect      *
 // ==/UserScript==
 
-(function() {
+(function () {
     'use strict';
 
     // --- CONFIGURAÇÃO ---
-    const restauradorUrl = 'http://SEU_SERVIDOR/caminho/para/restaurador.php';
+    const restauradorUrl = 'http://SEU_SERVIDOR/caminho/para/restaurador.php'; // MANTENHA SUA URL AQUI
     const dashboardUrl = 'http://dbserver.intelidata.local/restaurador/';
-    // ------------------
+    const STORAGE_KEY = 'beemore_last_tenant';
 
-    // Estilos com correção de cor para o modo escuro
+    // --- ESTILOS NATIVOS (Tailwind-like) ---
     GM_addStyle(`
-        .restore-db-btn {
-            background-color: rgb(94, 71, 208); color: white; padding: 8px 12px;
-            margin-bottom: 16px; border: none; border-radius: 4px; cursor: pointer;
-            font-size: 14px; font-weight: 500; width: 100%; transition: background-color 0.2s;
+        .restore-btn-inject {
+            background-color: #7c3aed; color: white; padding: 6px 12px;
+            border-radius: 6px; font-weight: 500; font-size: 13px; cursor: pointer;
+            border: none; transition: background 0.2s; margin-bottom: 8px;
+            display: inline-flex; align-items: center; gap: 5px;
         }
-        .restore-db-btn:hover { background-color: rgb(76, 54, 187); }
-        #restoreModal {
-            display: none; position: fixed; z-index: 10001; left: 0; top: 0;
-            width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.6);
-            justify-content: center; align-items: center;
+        .restore-btn-inject:hover { background-color: #6d28d9; }
+        
+        /* Modal Overlay */
+        #restoreModalOverlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.5); z-index: 9999;
+            display: flex; align-items: center; justify-content: center;
+            backdrop-filter: blur(2px);
         }
-        .modal-content {
-            background-color: #fefefe;
-            color: #212529; /* <<-- CORREÇÃO PRINCIPAL: Define a cor do texto padrão como escura */
-            margin: auto; padding: 25px; border: 1px solid #888;
-            width: 90%; max-width: 480px; border-radius: 8px; box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+        
+        /* Modal Content */
+        .restore-modal {
+            background: white; width: 400px; border-radius: 12px;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+            overflow: hidden; font-family: 'Inter', sans-serif;
         }
-        .modal-content h2 {
-            margin-top: 0; border-bottom: 1px solid #ccc; padding-bottom: 10px; color: rgb(94, 71, 208);
-        }
-        .modal-warning {
-            background-color: #fffbe6; border: 1px solid #ffeeba;
-            color: #856404 !important; /* <<-- CORREÇÃO: Usa !important para garantir a cor do texto do aviso */
-            padding: 15px; border-radius: 4px; margin-bottom: 20px; font-size: 14px; line-height: 1.5;
-        }
-        .modal-warning a { color: #0056b3; font-weight: bold; text-decoration: underline; }
-        .modal-content label {
-            display: block; margin-top: 15px; margin-bottom: 5px; font-weight: bold;
-            color: #343a40; /* <<-- CORREÇÃO: Garante que os labels sejam escuros */
-        }
-        .modal-content input[type="text"] { width: 100%; padding: 10px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; }
-        .modal-buttons { margin-top: 25px; display: flex; justify-content: flex-end; align-items: center; }
-        .modal-buttons button { padding: 10px 15px; border-radius: 5px; border: none; cursor: pointer; margin-left: 10px; font-weight: 500; transition: background-color 0.2s; }
+        .dark .restore-modal { background: #1e293b; color: #f1f5f9; border: 1px solid #334155; }
 
-        #verifyDbBtn { background-color: #aeb8c2; color: white; cursor: not-allowed; }
-        #cancelRestoreBtn { background-color: #6c757d; color: white; }
-        #cancelRestoreBtn:hover { background-color: #5a6268; }
-        #submitRestoreBtn { background-color: rgb(94, 71, 208); color: white; }
-        #submitRestoreBtn:hover { background-color: rgb(76, 54, 187); }
+        .restore-header {
+            padding: 16px 20px; border-bottom: 1px solid #e2e8f0;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .dark .restore-header { border-color: #334155; }
+        .restore-title { font-weight: 600; font-size: 18px; color: #0f172a; }
+        .dark .restore-title { color: #f8fafc; }
+
+        .restore-body { padding: 20px; }
+        
+        .restore-field { margin-bottom: 16px; }
+        .restore-label { display: block; font-size: 14px; font-weight: 500; margin-bottom: 6px; color: #475569; }
+        .dark .restore-label { color: #94a3b8; }
+        
+        .restore-input {
+            width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #cbd5e1;
+            font-size: 14px; outline: none; transition: border 0.2s;
+            background: #fff; color: #0f172a; box-sizing: border-box;
+        }
+        .dark .restore-input { background: #0f172a; border-color: #334155; color: #f8fafc; }
+        .restore-input:focus { border-color: #7c3aed; ring: 2px solid #7c3aed; }
+
+        .restore-footer {
+            padding: 16px 20px; background: #f8fafc; border-top: 1px solid #e2e8f0;
+            display: flex; justify-content: flex-end; gap: 10px;
+        }
+        .dark .restore-footer { background: #0f172a; border-color: #334155; }
+
+        .btn-cancel {
+            padding: 8px 16px; border-radius: 6px; font-weight: 500; cursor: pointer;
+            background: transparent; border: 1px solid #cbd5e1; color: #475569;
+        }
+        .dark .btn-cancel { border-color: #475569; color: #cbd5e1; }
+        .btn-confirm {
+            padding: 8px 16px; border-radius: 6px; font-weight: 500; cursor: pointer;
+            background: #7c3aed; border: none; color: white;
+        }
+        .btn-confirm:hover { background: #6d28d9; }
     `);
 
-    // --- O RESTANTE DO SCRIPT PERMANECE IDÊNTICO ---
+    // --- LÓGICA ---
 
     function createModal() {
-        if (document.getElementById('restoreModal')) return;
+        if (document.getElementById('restoreModalOverlay')) return;
+
         const modalHTML = `
-            <div id="restoreModal">
-                <div class="modal-content">
-                    <h2>Restaurar Base de Dados</h2>
-                    <div class="modal-warning">
-                        ⚠️ <strong>Atenção:</strong> Verifique se a base já não foi restaurada.
-                        <a href="${dashboardUrl}" target="_blank" rel="noopener noreferrer">Acessar dashboard</a>.
+            <div id="restoreModalOverlay" style="display:none;">
+                <div class="restore-modal">
+                    <div class="restore-header">
+                        <span class="restore-title">Restaurar Base</span>
+                        <button id="closeRestoreModal" style="background:none;border:none;cursor:pointer;font-size:20px;color:#94a3b8;">&times;</button>
                     </div>
-                    <label for="modalTenant">Tenant:</label>
-                    <input type="text" id="modalTenant" name="modalTenant">
-                    <label for="modalNomeBase">Nome da base:</label>
-                    <input type="text" id="modalNomeBase" name="modalNomeBase">
-                    <div class="modal-buttons">
-                        <button id="verifyDbBtn" disabled title="Funcionalidade a ser implementada">Verificar Base</button>
-                        <button id="cancelRestoreBtn">Cancelar</button>
-                        <button id="submitRestoreBtn">Restaurar</button>
+                    <div class="restore-body">
+                        <div class="restore-field">
+                            <label class="restore-label">Tenant</label>
+                            <input type="text" id="restoreTenant" class="restore-input" placeholder="Ex: cliente_x">
+                        </div>
+                        <div class="restore-field">
+                            <label class="restore-label">Nome da Base (Ticket)</label>
+                            <input type="text" id="restoreBase" class="restore-input" placeholder="Ex: 12345">
+                        </div>
+                        <div style="font-size:12px; color:#64748b; margin-top:10px;">
+                            ⚠️ Verifique se a base já não foi restaurada no <a href="${dashboardUrl}" target="_blank" style="color:#7c3aed;">Dashboard</a>.
+                        </div>
+                    </div>
+                    <div class="restore-footer">
+                        <button id="cancelRestore" class="btn-cancel">Cancelar</button>
+                        <button id="confirmRestore" class="btn-confirm">Restaurar</button>
                     </div>
                 </div>
-            </div>`;
+            </div>
+        `;
         document.body.insertAdjacentHTML('beforeend', modalHTML);
-        document.getElementById('cancelRestoreBtn').addEventListener('click', hideModal);
-        document.getElementById('submitRestoreBtn').addEventListener('click', submitRestoreRequest);
-        document.getElementById('restoreModal').addEventListener('click', (e) => (e.target.id === 'restoreModal') && hideModal());
+
+        // Eventos
+        document.getElementById('closeRestoreModal').onclick = hideModal;
+        document.getElementById('cancelRestore').onclick = hideModal;
+        document.getElementById('restoreModalOverlay').onclick = (e) => {
+            if (e.target.id === 'restoreModalOverlay') hideModal();
+        };
+        document.getElementById('confirmRestore').onclick = submitRestore;
     }
 
     function showModal() {
-        document.getElementById('modalTenant').value = getTenantFromPage();
-        document.getElementById('modalNomeBase').value = getTicketNumberFromPage();
-        document.getElementById('restoreModal').style.display = 'flex';
+        const overlay = document.getElementById('restoreModalOverlay');
+        if (!overlay) createModal();
+
+        // Preencher dados
+        const tenantInput = document.getElementById('restoreTenant');
+        const baseInput = document.getElementById('restoreBase');
+
+        // Tenant: Tenta pegar da tela, senão pega do storage
+        const pageTenant = getTenantFromPage();
+        const storedTenant = localStorage.getItem(STORAGE_KEY);
+        tenantInput.value = pageTenant || storedTenant || '';
+
+        // Base: Pega da tela
+        baseInput.value = getTicketNumberFromPage();
+
+        document.getElementById('restoreModalOverlay').style.display = 'flex';
+
+        // Auto-focus: Se tiver tenant, foca na base. Se não, foca no tenant.
+        if (tenantInput.value) {
+            baseInput.focus();
+        } else {
+            tenantInput.focus();
+        }
     }
 
     function hideModal() {
-        document.getElementById('restoreModal').style.display = 'none';
+        document.getElementById('restoreModalOverlay').style.display = 'none';
     }
 
+    // --- SELETORES ATUALIZADOS ---
+
     function getTenantFromPage() {
-        for (const label of document.querySelectorAll('app-label')) {
-            if (label.textContent.trim().toLowerCase() === 'tenant') {
-                const input = label.nextElementSibling?.querySelector('input');
-                if (input) return input.value;
-            }
+        // NOVO SELETOR: app-input-text > app-label contendo "Tenant"
+        const labels = Array.from(document.querySelectorAll('app-input-text app-label'));
+        const tenantLabel = labels.find(l => l.textContent.trim().includes('Tenant'));
+        if (tenantLabel) {
+            const input = tenantLabel.parentElement.querySelector('input');
+            if (input) return input.value;
         }
         return '';
     }
 
     function getTicketNumberFromPage() {
+        // Tenta pegar do título da página ou URL primeiro (mais confiável)
+        const urlMatch = window.location.pathname.match(/\/items\/edit\/([a-zA-Z0-9-]+)/); // ID interno
+
+        // NOVO SELETOR: app-item-title > span
         const titleSpan = document.querySelector('app-item-title > span');
-        if (titleSpan?.textContent.includes('#')) {
+        if (titleSpan && titleSpan.textContent.includes('#')) {
             const match = titleSpan.textContent.match(/#(\d+)/);
             if (match) return match[1];
         }
-        const pathMatch = window.location.pathname.match(/\/items\/edit\/([a-zA-Z0-9-]+)/);
-        if (pathMatch) {
-             const titleSpanOnEdit = document.querySelector('app-item-title > span');
-             if (titleSpanOnEdit && titleSpanOnEdit.textContent.includes('#')) {
-                 const match = titleSpanOnEdit.textContent.match(/#(\d+)/);
-                 if (match) return match[1];
-             }
-        }
+
+        // Fallback: Título da aba do navegador
+        const docTitle = document.title;
+        const titleMatch = docTitle.match(/#(\d+)/);
+        if (titleMatch) return titleMatch[1];
+
         return '';
     }
 
-    function submitRestoreRequest() {
-        const tenant = document.getElementById('modalTenant').value.trim();
-        const nomeBase = document.getElementById('modalNomeBase').value.trim();
-        if (!tenant || !nomeBase) { alert('Os campos Tenant e Nome da base são obrigatórios.'); return; }
-        if (restauradorUrl.includes('SEU_SERVIDOR')) { alert('ERRO: Configure o URL do restaurador no script.'); return; }
+    function submitRestore() {
+        const tenant = document.getElementById('restoreTenant').value.trim();
+        const nomeBase = document.getElementById('restoreBase').value.trim();
+
+        if (!tenant || !nomeBase) {
+            alert('Preencha Tenant e Nome da Base!');
+            return;
+        }
+
+        // Salvar Tenant
+        localStorage.setItem(STORAGE_KEY, tenant);
+
+        if (restauradorUrl.includes('SEU_SERVIDOR')) {
+            alert('ERRO: Configure a URL do script!');
+            return;
+        }
+
         const url = `${restauradorUrl}?action=processar&tenant=${encodeURIComponent(tenant)}&nomeBase=${encodeURIComponent(nomeBase)}`;
-        console.log(`Enviando requisição para: ${url}`);
-        hideModal();
+
+        // Feedback visual simples
+        const btn = document.getElementById('confirmRestore');
+        const originalText = btn.innerText;
+        btn.innerText = 'Enviando...';
+        btn.disabled = true;
+
         GM_xmlhttpRequest({
             method: "GET", url: url,
-            onload: res => { console.log("Resposta:", res.responseText); alert(`Processo para o tenant ${tenant} foi iniciado.`); },
-            onerror: res => { console.error("Erro:", res); alert('Ocorreu um erro. Verifique o console.'); }
+            onload: res => {
+                console.log("Resposta:", res.responseText);
+                alert(`Processo iniciado para ${tenant}!`);
+                hideModal();
+                btn.innerText = originalText;
+                btn.disabled = false;
+            },
+            onerror: res => {
+                console.error("Erro:", res);
+                alert('Erro ao conectar com o servidor.');
+                btn.innerText = originalText;
+                btn.disabled = false;
+            }
         });
     }
 
     function ensureButtonExists() {
         if (!window.location.pathname.includes('/items/edit/')) return;
         if (document.getElementById('restoreDbBtn')) return;
-        const targetLabel = Array.from(document.querySelectorAll('app-label')).find(label => label.textContent.trim() === 'Técnico destaque');
+
+        // NOVO SELETOR: Injetar antes do app-select do "Técnico destaque"
+        const labels = Array.from(document.querySelectorAll('app-select app-label'));
+        const targetLabel = labels.find(l => l.textContent.trim().includes('Técnico destaque'));
+
         if (targetLabel) {
-            const injectionPoint = targetLabel.closest('app-select');
-            if (injectionPoint?.parentNode) {
-                const restoreButton = document.createElement('button');
-                restoreButton.id = 'restoreDbBtn';
-                restoreButton.className = 'restore-db-btn';
-                restoreButton.innerText = 'Restaurar Base';
-                restoreButton.onclick = showModal;
-                injectionPoint.parentNode.insertBefore(restoreButton, injectionPoint);
+            const container = targetLabel.closest('app-select'); // O container pai
+            if (container) {
+                const btn = document.createElement('button');
+                btn.id = 'restoreDbBtn';
+                btn.className = 'restore-btn-inject';
+                btn.innerHTML = '<span>🔄</span> Restaurar Base';
+                btn.onclick = (e) => { e.preventDefault(); showModal(); };
+
+                // Insere ANTES do select
+                container.parentNode.insertBefore(btn, container);
             }
         }
     }
 
-    console.log('Beemore Restaurador: Script ativado e monitorando.');
+    // Inicialização
     createModal();
-    setInterval(ensureButtonExists, 750);
+    setInterval(ensureButtonExists, 1000);
+    console.log('Restaurador v2.0 carregado.');
 
 })();
