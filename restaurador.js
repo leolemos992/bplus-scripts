@@ -7,6 +7,8 @@
 // @match        https://*.beemore.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_addStyle
+// @updateURL    https://raw.githubusercontent.com/leolemos992/bplus-scripts/main/restaurador.js
+// @downloadURL  https://raw.githubusercontent.com/leolemos992/bplus-scripts/main/restaurador.js
 // @connect      *
 // ==/UserScript==
 
