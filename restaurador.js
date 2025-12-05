@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Beemore Restaurador de Base (v2.0)
 // @namespace    http://tampermonkey.net/
-// @version      2.0
+// @version      2.1
 // @description  Restaurador de base com UI nativa e memória de Tenant.
 // @author       Leo, Panca
 // @match        https://*.beemore.com/*
@@ -14,7 +14,7 @@
     'use strict';
 
     // --- CONFIGURAÇÃO ---
-    const restauradorUrl = 'http://SEU_SERVIDOR/caminho/para/restaurador.php'; // MANTENHA SUA URL AQUI
+    const restauradorUrl = 'http://dbserver.intelidata.local/restaurador/index.php'; // MANTENHA SUA URL AQUI
     const dashboardUrl = 'http://dbserver.intelidata.local/restaurador/';
     const STORAGE_KEY = 'beemore_last_tenant';
 
@@ -27,7 +27,7 @@
             display: inline-flex; align-items: center; gap: 5px;
         }
         .restore-btn-inject:hover { background-color: #6d28d9; }
-        
+
         /* Modal Overlay */
         #restoreModalOverlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
@@ -35,7 +35,7 @@
             display: flex; align-items: center; justify-content: center;
             backdrop-filter: blur(2px);
         }
-        
+
         /* Modal Content */
         .restore-modal {
             background: white; width: 400px; border-radius: 12px;
@@ -53,11 +53,11 @@
         .dark .restore-title { color: #f8fafc; }
 
         .restore-body { padding: 20px; }
-        
+
         .restore-field { margin-bottom: 16px; }
         .restore-label { display: block; font-size: 14px; font-weight: 500; margin-bottom: 6px; color: #475569; }
         .dark .restore-label { color: #94a3b8; }
-        
+
         .restore-input {
             width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #cbd5e1;
             font-size: 14px; outline: none; transition: border 0.2s;
